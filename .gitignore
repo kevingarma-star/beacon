@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Cloudflare Worker local secrets and build artifacts
+worker/.dev.vars
+worker/.wrangler

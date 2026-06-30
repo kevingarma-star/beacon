@@ -5,4 +5,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: '/beacon/',
+  server: {
+    proxy: {
+      '/suggest': 'http://localhost:8787',
+    },
+  },
 })
