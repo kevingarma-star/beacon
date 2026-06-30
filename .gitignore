@@ -23,5 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 
-# Cloudflare Worker local secrets
+# Cloudflare Worker local secrets and build artifacts
 worker/.dev.vars
+worker/.wrangler

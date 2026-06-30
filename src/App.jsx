@@ -25,7 +25,8 @@ export default function App() {
     setSuggestion('')
 
     try {
-      const res = await fetch('/suggest', {
+      const workerUrl = import.meta.env.VITE_WORKER_URL ?? ''
+      const res = await fetch(`${workerUrl}/suggest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ concern: concern.trim(), tone }),
