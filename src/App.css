@@ -41,6 +41,66 @@
   z-index: 2;
 }
 
+/* ── Nav tabs ─────────────────────────────────────────── */
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.nav-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+
+  &:hover {
+    color: rgba(255, 255, 255, 0.8);
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+.nav-tab--active {
+  color: #fff;
+  background: var(--orange);
+  box-shadow: 0 4px 12px rgba(242, 90, 84, 0.35);
+
+  &:hover {
+    color: #fff;
+    background: var(--orange-h);
+  }
+}
+
+.nav-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--navy);
+  background: var(--sky);
+  border-radius: 100px;
+  padding: 1px 6px;
+  line-height: 1.6;
+}
+
+.nav-tab--active .nav-badge {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--orange);
+}
+
 /* ── Header ───────────────────────────────────────────── */
 
 .app-header {
@@ -250,12 +310,81 @@
   }
 }
 
+/* ── Context badges ───────────────────────────────────── */
+
+.context-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── Training active badge ────────────────────────────── */
+
+.training-active-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5BE3A0;
+  background: rgba(39, 174, 96, 0.08);
+  border: 1px solid rgba(39, 174, 96, 0.2);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.training-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #5BE3A0;
+  box-shadow: 0 0 0 3px rgba(91, 227, 160, 0.25);
+  flex-shrink: 0;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(91, 227, 160, 0.25); }
+  50%       { box-shadow: 0 0 0 5px rgba(91, 227, 160, 0.12); }
+}
+
 /* ── Response panel ───────────────────────────────────── */
 
 .response-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.response-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.save-btn {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--coral);
+  background: rgba(242, 90, 84, 0.08);
+  border: 1px solid rgba(242, 90, 84, 0.3);
+  border-radius: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: rgba(242, 90, 84, 0.14);
+    border-color: rgba(242, 90, 84, 0.5);
+  }
+}
+
+.saved-flash {
+  font-size: 13px;
+  font-weight: 600;
+  color: #5BE3A0;
+  padding: 5px 4px;
 }
 
 .copy-btn {
