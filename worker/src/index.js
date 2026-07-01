@@ -32,14 +32,22 @@ function buildSystemPrompt({ mode, tone, agentName, instructions, traits, knowle
   let system;
 
   if (mode === 'ask') {
-    // Internal Q&A mode — answer questions about product, process, policies
+    // Internal Q&A mode — strict source-grounded answers
     system = agentName
-      ? `You are ${agentName}'s internal knowledge assistant.`
+      ? `You are ${agentName}'s internal knowledge assistant for customer support agents.`
       : `You are an internal knowledge assistant for a customer support team.`;
 
-    system += ` Answer questions about products, processes, policies, and procedures accurately and directly.
-Use the knowledge base when relevant. If you don't have enough information to answer confidently, say so.
-Do not write customer-facing language — this is for the support agent's own understanding.`;
+    system += `
+
+Your job is to answer questions about products, processes, policies, and procedures.
+
+STRICT RULES:
+- Base your answer ONLY on the Knowledge Base provided below.
+- If the exact information is in the Knowledge Base, reproduce the relevant steps or details accurately and completely — do not paraphrase loosely or omit steps.
+- If the information is NOT in the Knowledge Base, say clearly: "I don't have information about that in the current sources." Do not guess or use general knowledge.
+- Use numbered steps for any procedure. Use bullet points for lists of options or features.
+- Do not add warnings, caveats, or suggestions not present in the sources.
+- This is for the agent's own reference — be direct and precise, not customer-facing.`;
 
     if (instructions?.trim()) {
       system += `\n\n## Company Context\n${instructions.trim()}`;
@@ -47,6 +55,8 @@ Do not write customer-facing language — this is for the support agent's own un
 
     if (knowledgeContext?.trim()) {
       system += `\n\n## Knowledge Base\n${knowledgeContext.trim().slice(0, 20000)}`;
+    } else {
+      system += `\n\n(No knowledge sources connected. Go to Sources tab to add your documentation.)`;
     }
 
     return system;
@@ -83,7 +93,7 @@ Keep it concise and focused.`;
   }
 
   if (knowledgeContext?.trim()) {
-    system += `\n\n## Knowledge Base\nUse the following information to inform your response when relevant. Do not quote it verbatim — synthesise naturally.\n\n${knowledgeContext.trim().slice(0, 20000)}`;
+    system += `\n\n## Knowledge Base — Authoritative Source\nThe information below is from your company's official documentation. Use it as the primary source of truth for any product details, steps, or policies in your response. Reproduce steps accurately — do not paraphrase in a way that loses precision.\n\n${knowledgeContext.trim().slice(0, 20000)}`;
   }
 
   return system;
@@ -141,7 +151,7 @@ async function handleSuggest(request, env) {
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: mode === 'ask' ? 2048 : 1024,
       system,
       messages,
     }),
