@@ -1,50 +1,100 @@
 /* ── Layout ───────────────────────────────────────────── */
 
 .app {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 100svh;
+  background: linear-gradient(160deg, #041F30 0%, #02131e 100%);
+  overflow: hidden;
 }
 
+/* Full-bleed coverage map — matches GPX .heromap */
+.app-bg-map {
+  position: fixed;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: 0.55;
+  transform: scale(1.08);
+  transform-origin: center;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Gradient wash over the map — matches GPX .herowash */
+.app-bg-wash {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(1000px 640px at 82% 10%,  rgba(242, 90,  84,  .16), transparent 60%),
+    radial-gradient(900px  700px at 4%  100%, rgba(203, 238, 255, .10), transparent 60%),
+    linear-gradient(160deg, rgba(4, 31, 48, .72) 0%, rgba(2, 19, 30, .88) 100%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* All direct children above the map layers */
+.app > :not(.app-bg-map):not(.app-bg-wash) {
+  position: relative;
+  z-index: 2;
+}
+
+/* ── Header ───────────────────────────────────────────── */
+
 .app-header {
-  border-bottom: 1px solid var(--border);
-  padding: 0 24px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid var(--line);
+  padding: 0 32px;
+  background: rgba(4, 31, 48, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .app-header-inner {
   max-width: 1200px;
   margin: 0 auto;
-  height: 56px;
+  height: 64px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .app-logo {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 17px;
-  color: var(--text-h);
-  letter-spacing: -0.3px;
+  gap: 9px;
+  font-weight: 700;
+  font-size: 18px;
+  color: #fff;
+  letter-spacing: -0.4px;
 }
 
 .app-logo-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--coral);
+  box-shadow: 0 0 0 3px rgba(255, 119, 114, 0.25);
   flex-shrink: 0;
 }
 
 .app-header-sub {
-  font-size: 13px;
-  color: var(--text);
-  border-left: 1px solid var(--border);
-  padding-left: 12px;
-  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sky);
+  background: rgba(203, 238, 255, 0.10);
+  border: 1px solid var(--line);
+  padding: 5px 13px;
+  border-radius: 100px;
+  letter-spacing: 0.5px;
+  margin-left: 2px;
 }
+
+/* ── Main ─────────────────────────────────────────────── */
 
 .app-main {
   flex: 1;
@@ -53,32 +103,32 @@
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
-  padding: 32px 24px;
+  padding: 40px 32px;
   gap: 24px;
   box-sizing: border-box;
 
   @media (max-width: 768px) {
     grid-template-columns: 1fr;
-    padding: 20px 16px;
+    padding: 24px 20px;
   }
 }
 
 /* ── Panels ───────────────────────────────────────────── */
 
 .panel {
-  background: var(--social-bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 24px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 28px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 22px;
 }
 
 .panel-right {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 /* ── Fields ───────────────────────────────────────────── */
@@ -90,34 +140,34 @@
 }
 
 .field-label {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-h);
+  color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 1.5px;
 }
 
 .field-textarea {
   font-family: var(--sans);
   font-size: 15px;
-  line-height: 1.6;
-  color: var(--text-h);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 14px;
+  line-height: 1.65;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
   resize: vertical;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, background 0.15s;
 
   &::placeholder {
-    color: var(--text);
-    opacity: 0.6;
+    color: var(--muted);
+    opacity: 0.65;
   }
 
   &:focus {
-    border-color: var(--accent-border);
-    box-shadow: 0 0 0 3px var(--accent-bg);
+    border-color: var(--sky);
+    background: rgba(255, 255, 255, 0.08);
   }
 }
 
@@ -133,35 +183,37 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
   text-align: left;
 
   &:hover {
-    border-color: var(--accent-border);
+    border-color: rgba(203, 238, 255, 0.25);
+    background: rgba(255, 255, 255, 0.06);
+    transform: translateY(-1px);
   }
 }
 
 .tone-btn--active {
-  border-color: var(--accent);
-  background: var(--accent-bg);
-  box-shadow: 0 0 0 3px var(--accent-bg);
+  border-color: var(--orange);
+  background: rgba(242, 90, 84, 0.10);
+  box-shadow: 0 6px 16px rgba(242, 90, 84, 0.2);
 }
 
 .tone-btn-name {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-h);
+  color: #fff;
 }
 
 .tone-btn-desc {
   font-size: 12px;
-  color: var(--text);
+  color: var(--muted);
 }
 
 /* ── Submit button ────────────────────────────────────── */
@@ -172,24 +224,29 @@
   justify-content: center;
   gap: 8px;
   width: 100%;
-  padding: 12px;
+  padding: 14px;
   border: none;
-  border-radius: 8px;
-  background: var(--accent);
+  border-radius: 10px;
+  background: var(--orange);
   color: #fff;
-  font-size: 15px;
+  font-family: var(--sans);
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.15s;
   margin-top: auto;
+  box-shadow: 0 10px 26px rgba(242, 90, 84, 0.32);
+  transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
 
   &:hover:not(:disabled) {
-    opacity: 0.88;
+    background: var(--orange-h);
+    transform: translateY(-1px);
+    box-shadow: 0 14px 32px rgba(242, 90, 84, 0.4);
   }
 
   &:disabled {
-    opacity: 0.45;
+    opacity: 0.38;
     cursor: not-allowed;
+    box-shadow: none;
   }
 }
 
@@ -202,25 +259,27 @@
 }
 
 .copy-btn {
+  font-family: var(--sans);
   font-size: 13px;
   font-weight: 600;
-  color: var(--accent);
-  background: none;
-  border: 1px solid var(--accent-border);
-  border-radius: 6px;
-  padding: 4px 10px;
+  color: var(--sky);
+  background: rgba(203, 238, 255, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 12px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 
   &:hover {
-    background: var(--accent-bg);
+    background: rgba(203, 238, 255, 0.14);
+    border-color: rgba(203, 238, 255, 0.28);
   }
 }
 
 .response-body {
   font-size: 15px;
-  line-height: 1.7;
-  color: var(--text-h);
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.88);
   white-space: pre-wrap;
   flex: 1;
 }
@@ -231,17 +290,17 @@
   align-items: center;
   justify-content: center;
   font-size: 14px;
-  color: var(--text);
-  opacity: 0.6;
+  color: var(--muted);
+  opacity: 0.55;
   min-height: 200px;
 }
 
 .error-box {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
-  border-radius: 8px;
-  padding: 12px 14px;
+  background: rgba(242, 90, 84, 0.10);
+  border: 1px solid rgba(242, 90, 84, 0.35);
+  color: var(--coral);
+  border-radius: 10px;
+  padding: 12px 16px;
   font-size: 14px;
 }
 
@@ -255,7 +314,7 @@
   display: inline-block;
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255,255,255,0.4);
+  border: 2px solid rgba(255, 255, 255, 0.3);
   border-top-color: #fff;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
@@ -265,6 +324,6 @@
 .spinner--lg {
   width: 28px;
   height: 28px;
-  border-color: var(--accent-bg);
-  border-top-color: var(--accent);
+  border-color: rgba(242, 90, 84, 0.2);
+  border-top-color: var(--orange);
 }
