@@ -231,6 +231,46 @@
   }
 }
 
+/* ── Mode toggle ─────────────────────────────────────── */
+
+.mode-toggle {
+  display: flex;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 5px;
+}
+
+.mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+
+  &:hover:not(.mode-btn--active) {
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.04);
+  }
+}
+
+.mode-btn--active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
 /* ── Tone grid ────────────────────────────────────────── */
 
 .tone-grid {
