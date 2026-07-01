@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './App.css'
+import coverageMap from './assets/hubble-coverage-map.png'
 
 const TONES = [
   { id: 'professional', label: 'Professional', desc: 'Formal and polished' },
@@ -49,6 +50,8 @@ export default function App() {
 
   return (
     <div className="app">
+      <div className="app-bg-map" style={{ backgroundImage: `url(${coverageMap})` }} />
+      <div className="app-bg-wash" />
       <header className="app-header">
         <div className="app-header-inner">
           <div className="app-logo">
