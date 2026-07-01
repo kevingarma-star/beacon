@@ -19,17 +19,250 @@ Skip pleasantries. State the solution clearly. Use short sentences.`,
 Feel free to use contractions. Be approachable and positive while still being helpful.`,
 };
 
-const SYSTEM_BASE = `You help customer support agents draft responses to customer concerns.
+function corsResponse(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+  });
+}
+
+/* ── System prompt builder ───────────────────────────────── */
+
+function buildSystemPrompt({ tone, agentName, instructions, traits, knowledgeContext }) {
+  const tonePrompt = TONE_PROMPTS[tone] || TONE_PROMPTS.professional;
+
+  let system = agentName
+    ? `You are ${agentName}, a customer support agent. ${tonePrompt}`
+    : tonePrompt;
+
+  system += `\n\nYou help customer support agents draft responses to customer concerns.
 Given a customer concern, write a suggested reply the agent can use or adapt.
 Write only the response text — no subject lines, no labels, no preamble like "Here is a response:".
 Keep it concise and focused.`;
 
-function corsResponse(body, status = 200, extra = {}) {
-  return new Response(body, {
-    status,
-    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS, ...extra },
-  });
+  if (instructions?.trim()) {
+    system += `\n\n## Company Context & Instructions\n${instructions.trim()}`;
+  }
+
+  if (traits) {
+    const { empathy = 60, formality = 60, length = 50 } = traits;
+    const empStr  = empathy  > 70 ? 'high — acknowledge feelings before solutions'
+                  : empathy  < 30 ? 'low — stay task-focused and skip emotional language'
+                  : 'moderate';
+    const fmlStr  = formality > 70 ? 'formal — no contractions, use professional titles'
+                  : formality < 30 ? 'casual — contractions fine, conversational register'
+                  : 'balanced';
+    const lenStr  = length   > 70 ? 'thorough — include context, next steps, and a warm close'
+                  : length   < 30 ? 'brief — one or two sentences maximum'
+                  : 'concise but complete';
+    system += `\n\n## Style Guidelines\nEmpathy: ${empStr}. Formality: ${fmlStr}. Length: ${lenStr}.`;
+  }
+
+  if (knowledgeContext?.trim()) {
+    system += `\n\n## Knowledge Base\nUse the following information to inform your response when relevant. Do not quote it verbatim — synthesise naturally.\n\n${knowledgeContext.trim().slice(0, 20000)}`;
+  }
+
+  return system;
 }
+
+/* ── /suggest ────────────────────────────────────────────── */
+
+async function handleSuggest(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+
+  const {
+    concern,
+    tone = 'professional',
+    agentName,
+    instructions,
+    traits,
+    examples = [],
+    knowledgeContext,
+  } = body;
+
+  if (!concern || typeof concern !== 'string' || !concern.trim()) {
+    return corsResponse(JSON.stringify({ error: 'concern is required' }), 400);
+  }
+
+  if (!env.ANTHROPIC_API_KEY) {
+    return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
+  }
+
+  const system = buildSystemPrompt({ tone, agentName, instructions, traits, knowledgeContext });
+
+  // Build messages — inject few-shot examples before the real concern
+  const messages = [];
+  for (const ex of examples.slice(0, 5)) {
+    if (ex.concern?.trim() && ex.response?.trim()) {
+      messages.push({ role: 'user',      content: ex.concern.trim() });
+      messages.push({ role: 'assistant', content: ex.response.trim() });
+    }
+  }
+  messages.push({ role: 'user', content: concern.trim() });
+
+  const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system,
+      messages,
+    }),
+  });
+
+  if (!anthropicRes.ok) {
+    const err = await anthropicRes.text();
+    return corsResponse(JSON.stringify({ error: 'Claude API error', detail: err }), 502);
+  }
+
+  const data = await anthropicRes.json();
+  const suggestion = data.content?.[0]?.text ?? '';
+  return corsResponse(JSON.stringify({ suggestion }));
+}
+
+/* ── /fetch-source ───────────────────────────────────────── */
+
+function extractNotionPageId(url) {
+  // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  const uuid = url.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+  if (uuid) return uuid[1].replace(/-/g, '');
+  // 32-char hex (no dashes)
+  const hex = url.match(/([a-f0-9]{32})(?:[^a-f0-9]|$)/i);
+  if (hex) return hex[1];
+  // Last URL segment after final '-'
+  const seg = url.replace(/\?.*/, '').split('/').pop();
+  const id  = seg.split('-').pop();
+  if (id && id.length >= 32) return id.slice(0, 32);
+  return null;
+}
+
+function extractNotionTitle(pageData) {
+  const props = pageData.properties || {};
+  for (const key of Object.keys(props)) {
+    const prop = props[key];
+    if (prop?.type === 'title' && prop.title?.length) {
+      return prop.title.map(t => t.plain_text).join('');
+    }
+  }
+  return 'Notion Page';
+}
+
+function extractNotionText(blocksData) {
+  const lines = [];
+  for (const block of (blocksData.results || [])) {
+    const type    = block.type;
+    const content = block[type];
+    if (!content) continue;
+    const rich = content.rich_text || [];
+    const text = rich.map(t => t.plain_text).join('');
+    if (!text.trim()) continue;
+    if      (type === 'heading_1')           lines.push(`# ${text}`);
+    else if (type === 'heading_2')           lines.push(`## ${text}`);
+    else if (type === 'heading_3')           lines.push(`### ${text}`);
+    else if (type === 'bulleted_list_item')  lines.push(`• ${text}`);
+    else if (type === 'numbered_list_item')  lines.push(`${text}`);
+    else if (type === 'code')                lines.push(`\`${text}\``);
+    else if (type === 'quote')               lines.push(`> ${text}`);
+    else                                     lines.push(text);
+  }
+  return lines.join('\n');
+}
+
+function stripHtml(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#039;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function handleFetchSource(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+
+  const { type, url: sourceUrl, token } = body;
+
+  /* ── URL fetch ── */
+  if (type === 'url') {
+    if (!sourceUrl) return corsResponse(JSON.stringify({ error: 'url is required' }), 400);
+    try {
+      const res = await fetch(sourceUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Beacon/1.0; +https://github.com/kevingarma-star/beacon)' },
+        redirect: 'follow',
+      });
+      const ct   = res.headers.get('content-type') || '';
+      const raw  = await res.text();
+      const text = ct.includes('text/plain') || ct.includes('application/json')
+        ? raw
+        : stripHtml(raw);
+      return corsResponse(JSON.stringify({ content: text.slice(0, 30000) }));
+    } catch (err) {
+      return corsResponse(JSON.stringify({ error: `Could not fetch URL: ${err.message}` }), 502);
+    }
+  }
+
+  /* ── Notion fetch ── */
+  if (type === 'notion') {
+    const notionToken = token || env.NOTION_TOKEN;
+    if (!notionToken) {
+      return corsResponse(JSON.stringify({ error: 'Notion integration token required. Add it in the source setup.' }), 400);
+    }
+    if (!sourceUrl) return corsResponse(JSON.stringify({ error: 'Notion page URL is required' }), 400);
+
+    const pageId = extractNotionPageId(sourceUrl);
+    if (!pageId) {
+      return corsResponse(JSON.stringify({ error: 'Could not extract a Notion page ID from that URL. Make sure you share the page link directly.' }), 400);
+    }
+
+    const headers = {
+      'Authorization': `Bearer ${notionToken}`,
+      'Notion-Version': '2022-06-28',
+      'Content-Type': 'application/json',
+    };
+
+    try {
+      const [pageRes, blocksRes] = await Promise.all([
+        fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers }),
+        fetch(`https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`, { headers }),
+      ]);
+
+      if (!pageRes.ok) {
+        const err = await pageRes.json();
+        return corsResponse(JSON.stringify({ error: err.message || 'Notion API error — check your token and that the page is shared with your integration.' }), 502);
+      }
+
+      const [pageData, blocksData] = await Promise.all([pageRes.json(), blocksRes.json()]);
+      const title   = extractNotionTitle(pageData);
+      const content = extractNotionText(blocksData);
+
+      return corsResponse(JSON.stringify({ title, content: content.slice(0, 30000) }));
+    } catch (err) {
+      return corsResponse(JSON.stringify({ error: `Notion fetch failed: ${err.message}` }), 502);
+    }
+  }
+
+  return corsResponse(JSON.stringify({ error: `Unknown source type: ${type}` }), 400);
+}
+
+/* ── Router ──────────────────────────────────────────────── */
 
 export default {
   async fetch(request, env) {
@@ -37,57 +270,20 @@ export default {
       return new Response(null, { headers: CORS_HEADERS });
     }
 
-    const url = new URL(request.url);
+    const { pathname } = new URL(request.url);
 
-    if (url.pathname === '/health' && request.method === 'GET') {
+    if (pathname === '/health' && request.method === 'GET') {
       return corsResponse(JSON.stringify({ ok: true }));
     }
 
-    if (url.pathname !== '/suggest' || request.method !== 'POST') {
-      return corsResponse(JSON.stringify({ error: 'Not found' }), 404);
+    if (pathname === '/suggest' && request.method === 'POST') {
+      return handleSuggest(request, env);
     }
 
-    let concern, tone;
-    try {
-      ({ concern, tone = 'professional' } = await request.json());
-    } catch {
-      return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+    if (pathname === '/fetch-source' && request.method === 'POST') {
+      return handleFetchSource(request, env);
     }
 
-    if (!concern || typeof concern !== 'string' || concern.trim().length === 0) {
-      return corsResponse(JSON.stringify({ error: 'concern is required' }), 400);
-    }
-
-    if (!env.ANTHROPIC_API_KEY) {
-      return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
-    }
-
-    const tonePrompt = TONE_PROMPTS[tone] || TONE_PROMPTS.professional;
-    const systemPrompt = `${tonePrompt}\n\n${SYSTEM_BASE}`;
-
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: concern.trim() }],
-      }),
-    });
-
-    if (!anthropicRes.ok) {
-      const err = await anthropicRes.text();
-      return corsResponse(JSON.stringify({ error: 'Claude API error', detail: err }), 502);
-    }
-
-    const data = await anthropicRes.json();
-    const suggestion = data.content?.[0]?.text ?? '';
-
-    return corsResponse(JSON.stringify({ suggestion }));
+    return corsResponse(JSON.stringify({ error: 'Not found' }), 404);
   },
 };
