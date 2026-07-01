@@ -154,9 +154,19 @@ function NotionForm({ onAdd, onCancel }) {
 
   return (
     <form className="source-form" onSubmit={handleSubmit}>
-      <p className="source-form-hint">
-        Create a <strong>Notion Integration</strong> at <code>notion.so/my-integrations</code>, then share the page with it. Paste the token and page URL below.
-      </p>
+      <div className="source-form-steps">
+        <p className="source-form-hint">
+          You need a Notion <strong>Internal Integration</strong> token (not an OAuth connection).
+        </p>
+        <ol className="source-form-steps-list">
+          <li>Go to <code>notion.so/my-integrations</code> → <strong>New integration</strong> → pick your workspace → copy the token (starts with <code>ntn_</code> or <code>secret_</code>)</li>
+          <li>Open your Notion page → top-right <strong>···</strong> menu → <strong>Connections</strong> → connect your integration</li>
+          <li>Paste the token and page URL below</li>
+        </ol>
+        <p className="source-form-hint" style={{ marginTop: 0 }}>
+          No workspace showing? You need to be a workspace <strong>admin</strong>. Alternatively, ask Claude to sync the page for you — it already has Notion access.
+        </p>
+      </div>
       <div className="source-form-row">
         <div className="source-form-field">
           <label className="train-label">Integration Token</label>
