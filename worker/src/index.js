@@ -28,10 +28,34 @@ function corsResponse(body, status = 200) {
 
 /* ── System prompt builder ───────────────────────────────── */
 
-function buildSystemPrompt({ tone, agentName, instructions, traits, knowledgeContext }) {
+function buildSystemPrompt({ mode, tone, agentName, instructions, traits, knowledgeContext }) {
+  let system;
+
+  if (mode === 'ask') {
+    // Internal Q&A mode — answer questions about product, process, policies
+    system = agentName
+      ? `You are ${agentName}'s internal knowledge assistant.`
+      : `You are an internal knowledge assistant for a customer support team.`;
+
+    system += ` Answer questions about products, processes, policies, and procedures accurately and directly.
+Use the knowledge base when relevant. If you don't have enough information to answer confidently, say so.
+Do not write customer-facing language — this is for the support agent's own understanding.`;
+
+    if (instructions?.trim()) {
+      system += `\n\n## Company Context\n${instructions.trim()}`;
+    }
+
+    if (knowledgeContext?.trim()) {
+      system += `\n\n## Knowledge Base\n${knowledgeContext.trim().slice(0, 20000)}`;
+    }
+
+    return system;
+  }
+
+  // Default: customer reply mode
   const tonePrompt = TONE_PROMPTS[tone] || TONE_PROMPTS.professional;
 
-  let system = agentName
+  system = agentName
     ? `You are ${agentName}, a customer support agent. ${tonePrompt}`
     : tonePrompt;
 
@@ -77,6 +101,7 @@ async function handleSuggest(request, env) {
 
   const {
     concern,
+    mode = 'reply',
     tone = 'professional',
     agentName,
     instructions,
@@ -93,14 +118,16 @@ async function handleSuggest(request, env) {
     return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
   }
 
-  const system = buildSystemPrompt({ tone, agentName, instructions, traits, knowledgeContext });
+  const system = buildSystemPrompt({ mode, tone, agentName, instructions, traits, knowledgeContext });
 
-  // Build messages — inject few-shot examples before the real concern
+  // Build messages — inject few-shot examples before the real concern (reply mode only)
   const messages = [];
-  for (const ex of examples.slice(0, 5)) {
-    if (ex.concern?.trim() && ex.response?.trim()) {
-      messages.push({ role: 'user',      content: ex.concern.trim() });
-      messages.push({ role: 'assistant', content: ex.response.trim() });
+  if (mode !== 'ask') {
+    for (const ex of examples.slice(0, 5)) {
+      if (ex.concern?.trim() && ex.response?.trim()) {
+        messages.push({ role: 'user',      content: ex.concern.trim() });
+        messages.push({ role: 'assistant', content: ex.response.trim() });
+      }
     }
   }
   messages.push({ role: 'user', content: concern.trim() });

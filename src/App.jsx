@@ -15,6 +15,7 @@ const TONES = [
 
 export default function App() {
   const [view, setView]             = useState('generate')
+  const [mode, setMode]             = useState('reply')
   const [concern, setConcern]       = useState('')
   const [tone, setTone]             = useState('professional')
   const [suggestion, setSuggestion] = useState('')
@@ -25,6 +26,14 @@ export default function App() {
 
   const training = useTraining()
   const sources  = useSources()
+
+  function switchMode(m) {
+    setMode(m)
+    setConcern('')
+    setSuggestion('')
+    setError('')
+    setSaved(false)
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -42,6 +51,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           concern:          concern.trim(),
+          mode,
           tone,
           agentName:        training.data.agentName    || undefined,
           instructions:     training.data.instructions || undefined,
@@ -71,6 +81,8 @@ export default function App() {
     setSaved(true)
     setTimeout(() => setSaved(false), 2500)
   }
+
+  const isAsk = mode === 'ask'
 
   return (
     <div className="app">
@@ -139,40 +151,71 @@ export default function App() {
       {view === 'generate' && (
         <main className="app-main">
           <form className="panel panel-left" onSubmit={handleSubmit}>
+
+            {/* Mode toggle */}
+            <div className="mode-toggle">
+              <button
+                type="button"
+                className={`mode-btn${!isAsk ? ' mode-btn--active' : ''}`}
+                onClick={() => switchMode('reply')}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                Customer Reply
+              </button>
+              <button
+                type="button"
+                className={`mode-btn${isAsk ? ' mode-btn--active' : ''}`}
+                onClick={() => switchMode('ask')}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                Ask Anything
+              </button>
+            </div>
+
             <div className="field">
               <label className="field-label" htmlFor="concern">
-                Customer Concern
+                {isAsk ? 'Your Question' : 'Customer Concern'}
               </label>
               <textarea
                 id="concern"
                 className="field-textarea"
-                placeholder="Paste or type the customer's message, complaint, or question…"
+                placeholder={isAsk
+                  ? 'Ask about a product, process, policy, or procedure…'
+                  : 'Paste or type the customer\'s message, complaint, or question…'}
                 value={concern}
                 onChange={e => setConcern(e.target.value)}
                 rows={10}
               />
             </div>
 
-            <div className="field">
-              <label className="field-label">Response Tone</label>
-              <div className="tone-grid">
-                {TONES.map(t => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`tone-btn${tone === t.id ? ' tone-btn--active' : ''}`}
-                    onClick={() => setTone(t.id)}
-                  >
-                    <span className="tone-btn-name">{t.label}</span>
-                    <span className="tone-btn-desc">{t.desc}</span>
-                  </button>
-                ))}
+            {!isAsk && (
+              <div className="field">
+                <label className="field-label">Response Tone</label>
+                <div className="tone-grid">
+                  {TONES.map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`tone-btn${tone === t.id ? ' tone-btn--active' : ''}`}
+                      onClick={() => setTone(t.id)}
+                    >
+                      <span className="tone-btn-name">{t.label}</span>
+                      <span className="tone-btn-desc">{t.desc}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {(training.data.examples.length > 0 || sources.activeCount > 0) && (
               <div className="context-badges">
-                {training.data.examples.length > 0 && (
+                {!isAsk && training.data.examples.length > 0 && (
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     {training.data.examples.length} training example{training.data.examples.length !== 1 ? 's' : ''}
@@ -193,21 +236,23 @@ export default function App() {
               disabled={loading || !concern.trim()}
             >
               {loading && <span className="spinner" />}
-              {loading ? 'Generating…' : 'Suggest Response'}
+              {loading ? 'Thinking…' : isAsk ? 'Get Answer' : 'Suggest Response'}
             </button>
           </form>
 
           <div className="panel panel-right">
             <div className="response-top">
-              <span className="field-label">Suggested Response</span>
+              <span className="field-label">{isAsk ? 'Answer' : 'Suggested Response'}</span>
               {suggestion && (
                 <div className="response-actions">
-                  {saved ? (
-                    <span className="saved-flash">&#10003; Saved</span>
-                  ) : (
-                    <button className="save-btn" type="button" onClick={handleSave}>
-                      Save as Example
-                    </button>
+                  {!isAsk && (
+                    saved ? (
+                      <span className="saved-flash">&#10003; Saved</span>
+                    ) : (
+                      <button className="save-btn" type="button" onClick={handleSave}>
+                        Save as Example
+                      </button>
+                    )
                   )}
                   <button className="copy-btn" type="button" onClick={handleCopy}>
                     {copied ? '✓ Copied' : 'Copy'}
@@ -220,7 +265,9 @@ export default function App() {
 
             {!error && !suggestion && !loading && (
               <div className="empty-state">
-                Your suggested response will appear here.
+                {isAsk
+                  ? 'Your answer will appear here.'
+                  : 'Your suggested response will appear here.'}
               </div>
             )}
 
