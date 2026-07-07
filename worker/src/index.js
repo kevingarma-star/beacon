@@ -102,7 +102,7 @@ Keep it concise and focused.`;
   }
 
   if (knowledgeContext?.trim()) {
-    system += `\n\n## Knowledge Base — Authoritative Source\nThe information below is from your company's official documentation. Use it as the primary source of truth for any product details, steps, or policies in your response. Reproduce steps accurately — do not paraphrase in a way that loses precision.\n\n${knowledgeContext.trim().slice(0, 20000)}`;
+    system += `\n\n## Knowledge Base — You MUST use this\nThe content below is your company's official documentation. Rules:\n- If the customer's concern relates to anything covered here, base your response on this content. Do not substitute general knowledge.\n- Reproduce product names, steps, and policies accurately — do not paraphrase in a way that changes the meaning.\n- If something is NOT covered here, you may use general customer service best practices, but do not invent product-specific details.\n\n${knowledgeContext.trim().slice(0, 20000)}`;
   }
 
   return system;
@@ -203,24 +203,62 @@ function extractNotionTitle(pageData) {
   return 'Notion Page';
 }
 
-function extractNotionText(blocksData) {
-  const lines = [];
-  for (const block of (blocksData.results || [])) {
-    const type    = block.type;
-    const content = block[type];
-    if (!content) continue;
-    const rich = content.rich_text || [];
-    const text = rich.map(t => t.plain_text).join('');
-    if (!text.trim()) continue;
-    if      (type === 'heading_1')           lines.push(`# ${text}`);
-    else if (type === 'heading_2')           lines.push(`## ${text}`);
-    else if (type === 'heading_3')           lines.push(`### ${text}`);
-    else if (type === 'bulleted_list_item')  lines.push(`• ${text}`);
-    else if (type === 'numbered_list_item')  lines.push(`${text}`);
-    else if (type === 'code')                lines.push(`\`${text}\``);
-    else if (type === 'quote')               lines.push(`> ${text}`);
-    else                                     lines.push(text);
+function richText(arr) {
+  return (arr || []).map(t => t.plain_text).join('');
+}
+
+function blockToLine(block, depth) {
+  const type    = block.type;
+  const content = block[type];
+  if (!content) return '';
+  const indent  = '  '.repeat(depth);
+
+  switch (type) {
+    case 'heading_1':           return `# ${richText(content.rich_text)}`;
+    case 'heading_2':           return `## ${richText(content.rich_text)}`;
+    case 'heading_3':           return `### ${richText(content.rich_text)}`;
+    case 'bulleted_list_item':  return `${indent}• ${richText(content.rich_text)}`;
+    case 'numbered_list_item':  return `${indent}${richText(content.rich_text)}`;
+    case 'to_do':               return `${indent}[${content.checked ? 'x' : ' '}] ${richText(content.rich_text)}`;
+    case 'toggle':              return richText(content.rich_text);
+    case 'callout':             return richText(content.rich_text);
+    case 'quote':               return `> ${richText(content.rich_text)}`;
+    case 'code':                return `\`\`\`\n${richText(content.rich_text)}\n\`\`\``;
+    case 'table_row':           return (content.cells || []).map(c => richText(c)).join(' | ');
+    default:                    return richText(content.rich_text);
   }
+}
+
+// Fetches ALL blocks for a given blockId — paginates until done, recurses into children.
+// depth + blockCount guard against runaway pages.
+async function extractNotionContent(blockId, headers, depth = 0, blockCount = { n: 0 }) {
+  const MAX_DEPTH  = 5;
+  const MAX_BLOCKS = 500;
+  if (depth > MAX_DEPTH || blockCount.n >= MAX_BLOCKS) return '';
+
+  const lines  = [];
+  let   cursor = undefined;
+
+  do {
+    const url = `https://api.notion.com/v1/blocks/${blockId}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ''}`;
+    const res  = await fetch(url, { headers });
+    if (!res.ok) break;
+    const data = await res.json();
+
+    for (const block of (data.results || [])) {
+      if (blockCount.n++ >= MAX_BLOCKS) break;
+      const line = blockToLine(block, depth);
+      if (line.trim()) lines.push(line);
+
+      if (block.has_children) {
+        const child = await extractNotionContent(block.id, headers, depth + 1, blockCount);
+        if (child) lines.push(child);
+      }
+    }
+
+    cursor = data.has_more ? data.next_cursor : undefined;
+  } while (cursor);
+
   return lines.join('\n');
 }
 
@@ -285,19 +323,16 @@ async function handleFetchSource(request, env) {
     };
 
     try {
-      const [pageRes, blocksRes] = await Promise.all([
-        fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers }),
-        fetch(`https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`, { headers }),
-      ]);
+      const pageRes = await fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers });
 
       if (!pageRes.ok) {
         const err = await pageRes.json();
         return corsResponse(JSON.stringify({ error: err.message || 'Notion API error — check your token and that the page is shared with your integration.' }), 502);
       }
 
-      const [pageData, blocksData] = await Promise.all([pageRes.json(), blocksRes.json()]);
-      const title   = extractNotionTitle(pageData);
-      const content = extractNotionText(blocksData);
+      const pageData = await pageRes.json();
+      const title    = extractNotionTitle(pageData);
+      const content  = await extractNotionContent(pageId, headers);
 
       return corsResponse(JSON.stringify({ title, content: content.slice(0, 30000) }));
     } catch (err) {
