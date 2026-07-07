@@ -4,20 +4,29 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-const TONE_PROMPTS = {
-  professional: `You are a professional customer support agent. Write formally and courteously.
-Use clear, polished language. Avoid contractions. Be solution-oriented.`,
-
-  empathetic: `You are an empathetic customer support agent. Lead with genuine understanding.
-Acknowledge the customer's frustration or concern before moving to solutions.
-Use warm, human language that shows you care.`,
-
-  direct: `You are a direct customer support agent. Be concise and get straight to the point.
-Skip pleasantries. State the solution clearly. Use short sentences.`,
-
-  friendly: `You are a friendly customer support agent. Use a warm, conversational tone.
-Feel free to use contractions. Be approachable and positive while still being helpful.`,
+// Per-tone style instructions (used for blending when multiple tones are selected)
+const TONE_INSTRUCTIONS = {
+  professional: `Write formally and courteously. Use clear, polished language. Avoid contractions. Be solution-oriented.`,
+  empathetic:   `Lead with genuine understanding. Acknowledge the customer's frustration or concern before moving to solutions. Use warm, human language that shows you care.`,
+  direct:       `Be concise and get straight to the point. Skip pleasantries. State the solution clearly. Use short sentences.`,
+  friendly:     `Use a warm, conversational tone. Feel free to use contractions. Be approachable and positive while still being helpful.`,
+  apologetic:   `Open with a sincere, specific apology that takes clear ownership — use first-person accountability ("we got this wrong", "I'm sorry we let you down"). Move to the resolution only after the apology has landed. Keep it genuine, not performative.`,
+  reassuring:   `Lead with calm confidence that the issue will be resolved. Use certain, steady language ("You're in good hands", "We'll take care of this"). Avoid phrases that introduce doubt. End with a clear, confident next step.`,
+  technical:    `Be precise and direct. Do not over-explain basics. Use numbered steps for any procedure. Include exact values, settings, or commands where relevant. Skip emotional language. Trust the customer to follow technical instructions.`,
+  firm:         `State your position clearly in the first sentence — do not bury it. Be polite throughout but do not hedge or imply flexibility that does not exist. Offer any genuine alternatives available. Do not apologize for the policy itself.`,
 };
+
+function buildTonePrompt(tones) {
+  const valid = (Array.isArray(tones) ? tones : [tones]).filter(t => TONE_INSTRUCTIONS[t]);
+  if (valid.length === 0) valid.push('professional');
+  if (valid.length === 1) {
+    const t = valid[0];
+    return `You are a customer support agent. ${TONE_INSTRUCTIONS[t]}`;
+  }
+  const label = t => t.charAt(0).toUpperCase() + t.slice(1);
+  const lines = valid.map(t => `- ${label(t)}: ${TONE_INSTRUCTIONS[t]}`).join('\n');
+  return `You are a customer support agent. Blend the following tone styles in your response:\n${lines}`;
+}
 
 function corsResponse(body, status = 200) {
   return new Response(body, {
@@ -28,7 +37,7 @@ function corsResponse(body, status = 200) {
 
 /* ── System prompt builder ───────────────────────────────── */
 
-function buildSystemPrompt({ mode, tone, agentName, instructions, traits, knowledgeContext }) {
+function buildSystemPrompt({ mode, tones, agentName, instructions, traits, knowledgeContext }) {
   let system;
 
   if (mode === 'ask') {
@@ -63,7 +72,7 @@ STRICT RULES:
   }
 
   // Default: customer reply mode
-  const tonePrompt = TONE_PROMPTS[tone] || TONE_PROMPTS.professional;
+  const tonePrompt = buildTonePrompt(tones);
 
   system = agentName
     ? `You are ${agentName}, a customer support agent. ${tonePrompt}`
@@ -112,7 +121,7 @@ async function handleSuggest(request, env) {
   const {
     concern,
     mode = 'reply',
-    tone = 'professional',
+    tones = ['professional'],
     agentName,
     instructions,
     traits,
@@ -128,7 +137,7 @@ async function handleSuggest(request, env) {
     return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
   }
 
-  const system = buildSystemPrompt({ mode, tone, agentName, instructions, traits, knowledgeContext });
+  const system = buildSystemPrompt({ mode, tones, agentName, instructions, traits, knowledgeContext });
 
   // Build messages — inject few-shot examples before the real concern (reply mode only)
   const messages = [];

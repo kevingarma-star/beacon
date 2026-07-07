@@ -9,15 +9,19 @@ import { useSources }  from './useSources'
 const TONES = [
   { id: 'professional', label: 'Professional', desc: 'Formal and polished' },
   { id: 'empathetic',   label: 'Empathetic',   desc: 'Warm and understanding' },
-  { id: 'direct',       label: 'Direct',        desc: 'Concise, no fluff' },
-  { id: 'friendly',     label: 'Friendly',      desc: 'Casual and approachable' },
+  { id: 'direct',       label: 'Direct',       desc: 'Concise, no fluff' },
+  { id: 'friendly',     label: 'Friendly',     desc: 'Casual and approachable' },
+  { id: 'apologetic',   label: 'Apologetic',   desc: 'Owns the issue sincerely' },
+  { id: 'reassuring',   label: 'Reassuring',   desc: 'Calm and confidence-building' },
+  { id: 'technical',    label: 'Technical',    desc: 'Precise, step-by-step' },
+  { id: 'firm',         label: 'Firm',         desc: 'Polite but clear on policy' },
 ]
 
 export default function App() {
   const [view, setView]             = useState('generate')
   const [mode, setMode]             = useState('reply')
   const [concern, setConcern]       = useState('')
-  const [tone, setTone]             = useState('professional')
+  const [tones, setTones]           = useState(['professional'])
   const [suggestion, setSuggestion] = useState('')
   const [loading, setLoading]       = useState(false)
   const [error, setError]           = useState('')
@@ -33,6 +37,14 @@ export default function App() {
     setSuggestion('')
     setError('')
     setSaved(false)
+  }
+
+  function toggleTone(id) {
+    setTones(prev =>
+      prev.includes(id)
+        ? prev.length === 1 ? prev : prev.filter(t => t !== id)
+        : [...prev, id]
+    )
   }
 
   async function handleSubmit(e) {
@@ -52,7 +64,7 @@ export default function App() {
         body: JSON.stringify({
           concern:          concern.trim(),
           mode,
-          tone,
+          tones,
           agentName:        training.data.agentName    || undefined,
           instructions:     training.data.instructions || undefined,
           traits:           training.data.traits,
@@ -202,8 +214,8 @@ export default function App() {
                     <button
                       key={t.id}
                       type="button"
-                      className={`tone-btn${tone === t.id ? ' tone-btn--active' : ''}`}
-                      onClick={() => setTone(t.id)}
+                      className={`tone-btn${tones.includes(t.id) ? ' tone-btn--active' : ''}`}
+                      onClick={() => toggleTone(t.id)}
                     >
                       <span className="tone-btn-name">{t.label}</span>
                       <span className="tone-btn-desc">{t.desc}</span>
