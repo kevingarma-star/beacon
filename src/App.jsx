@@ -69,7 +69,7 @@ export default function App() {
           instructions:     training.data.instructions || undefined,
           traits:           training.data.traits,
           examples:         training.data.examples.slice(0, 5),
-          knowledgeContext: sources.knowledgeContext   || undefined,
+          knowledgeContext: isAsk ? (sources.knowledgeContext || undefined) : undefined,
         }),
       })
       const data = await res.json()
@@ -233,7 +233,7 @@ export default function App() {
                     {training.data.examples.length} training example{training.data.examples.length !== 1 ? 's' : ''}
                   </div>
                 )}
-                {sources.activeCount > 0 && (
+                {isAsk && sources.activeCount > 0 && (
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     {sources.activeCount} knowledge source{sources.activeCount !== 1 ? 's' : ''}
