@@ -101,10 +101,6 @@ Keep it concise and focused.`;
     system += `\n\n## Style Guidelines\nEmpathy: ${empStr}. Formality: ${fmlStr}. Length: ${lenStr}.`;
   }
 
-  if (knowledgeContext?.trim()) {
-    system += `\n\n## Knowledge Base — You MUST use this\nThe content below is your company's official documentation. Rules:\n- If the customer's concern relates to anything covered here, base your response on this content. Do not substitute general knowledge.\n- Reproduce product names, steps, and policies accurately — do not paraphrase in a way that changes the meaning.\n- If something is NOT covered here, you may use general customer service best practices, but do not invent product-specific details.\n\n${knowledgeContext.trim().slice(0, 20000)}`;
-  }
-
   return system;
 }
 
