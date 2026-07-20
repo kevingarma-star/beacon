@@ -172,6 +172,79 @@ async function handleSuggest(request, env) {
   return corsResponse(JSON.stringify({ suggestion }));
 }
 
+/* ── /chat ───────────────────────────────────────────────── */
+
+async function handleChat(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+
+  const { messages = [], tones = ['professional'], agentName, instructions, traits } = body;
+
+  if (!messages.length || messages[messages.length - 1].role !== 'user') {
+    return corsResponse(JSON.stringify({ error: 'messages must end with a user turn' }), 400);
+  }
+
+  if (!env.ANTHROPIC_API_KEY) {
+    return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
+  }
+
+  const tonePrompt = buildTonePrompt(tones);
+
+  let system = agentName
+    ? `You are helping ${agentName}'s customer support team craft replies to customers.`
+    : `You are helping a customer support agent craft replies to customers.`;
+
+  system += `\n\n${tonePrompt}`;
+
+  system += `\n\nWhen the agent shares a customer message or concern, draft a reply they can send directly to the customer. When they ask for changes (shorter, more empathetic, add an apology, etc.), revise and return the updated reply. Keep your response focused — include the draft clearly. Write the reply from the agent's perspective addressed to the customer.`;
+
+  if (instructions?.trim()) {
+    system += `\n\n## Company Context\n${instructions.trim()}`;
+  }
+
+  if (traits) {
+    const { empathy = 60, formality = 60, length = 50 } = traits;
+    const empStr  = empathy  > 70 ? 'high — acknowledge feelings before solutions'
+                  : empathy  < 30 ? 'low — stay task-focused and skip emotional language'
+                  : 'moderate';
+    const fmlStr  = formality > 70 ? 'formal — no contractions, use professional titles'
+                  : formality < 30 ? 'casual — contractions fine, conversational register'
+                  : 'balanced';
+    const lenStr  = length   > 70 ? 'thorough — include context, next steps, and a warm close'
+                  : length   < 30 ? 'brief — one or two sentences maximum'
+                  : 'concise but complete';
+    system += `\n\n## Style Guidelines\nEmpathy: ${empStr}. Formality: ${fmlStr}. Length: ${lenStr}.`;
+  }
+
+  const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system,
+      messages,
+    }),
+  });
+
+  if (!anthropicRes.ok) {
+    const err = await anthropicRes.text();
+    return corsResponse(JSON.stringify({ error: 'Claude API error', detail: err }), 502);
+  }
+
+  const data = await anthropicRes.json();
+  const message = data.content?.[0]?.text ?? '';
+  return corsResponse(JSON.stringify({ message }));
+}
+
 /* ── /fetch-source ───────────────────────────────────────── */
 
 function extractNotionPageId(url) {
@@ -355,6 +428,10 @@ export default {
 
     if (pathname === '/suggest' && request.method === 'POST') {
       return handleSuggest(request, env);
+    }
+
+    if (pathname === '/chat' && request.method === 'POST') {
+      return handleChat(request, env);
     }
 
     if (pathname === '/fetch-source' && request.method === 'POST') {

@@ -3,6 +3,7 @@ import './App.css'
 import coverageMap from './assets/hubble-coverage-map.png'
 import Training from './Training'
 import Sources  from './Sources'
+import Chat     from './Chat'
 import { useTraining } from './useTraining'
 import { useSources }  from './useSources'
 
@@ -25,8 +26,12 @@ export default function App() {
   const [suggestion, setSuggestion] = useState('')
   const [loading, setLoading]       = useState(false)
   const [error, setError]           = useState('')
-  const [copied, setCopied]         = useState(false)
-  const [saved, setSaved]           = useState(false)
+  const [copied, setCopied]           = useState(false)
+  const [saved, setSaved]             = useState(false)
+  const [chatMode, setChatMode]       = useState(false)
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatError, setChatError]     = useState('')
 
   const training = useTraining()
   const sources  = useSources()
@@ -37,6 +42,8 @@ export default function App() {
     setSuggestion('')
     setError('')
     setSaved(false)
+    setChatMessages([])
+    setChatError('')
   }
 
   function toggleTone(id) {
@@ -92,6 +99,36 @@ export default function App() {
     training.addExample(concern, suggestion)
     setSaved(true)
     setTimeout(() => setSaved(false), 2500)
+  }
+
+  async function handleChatSend(text) {
+    const userMsg  = { role: 'user', content: text }
+    const nextMsgs = [...chatMessages, userMsg]
+    setChatMessages(nextMsgs)
+    setChatLoading(true)
+    setChatError('')
+
+    try {
+      const workerUrl = import.meta.env.VITE_WORKER_URL ?? ''
+      const res = await fetch(`${workerUrl}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages:     nextMsgs,
+          tones,
+          agentName:    training.data.agentName    || undefined,
+          instructions: training.data.instructions || undefined,
+          traits:       training.data.traits,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Something went wrong')
+      setChatMessages(prev => [...prev, { role: 'assistant', content: data.message }])
+    } catch (err) {
+      setChatError(err.message)
+    } finally {
+      setChatLoading(false)
+    }
   }
 
   const isAsk = mode === 'ask'
@@ -190,21 +227,42 @@ export default function App() {
               </button>
             </div>
 
-            <div className="field">
-              <label className="field-label" htmlFor="concern">
-                {isAsk ? 'Your Question' : 'Customer Concern'}
-              </label>
-              <textarea
-                id="concern"
-                className="field-textarea"
-                placeholder={isAsk
-                  ? 'Ask about a product, process, policy, or procedure…'
-                  : 'Paste or type the customer\'s message, complaint, or question…'}
-                value={concern}
-                onChange={e => setConcern(e.target.value)}
-                rows={10}
-              />
-            </div>
+            {!isAsk && (
+              <div className="sub-toggle">
+                <button
+                  type="button"
+                  className={`sub-btn${!chatMode ? ' sub-btn--active' : ''}`}
+                  onClick={() => setChatMode(false)}
+                >
+                  Draft
+                </button>
+                <button
+                  type="button"
+                  className={`sub-btn${chatMode ? ' sub-btn--active' : ''}`}
+                  onClick={() => setChatMode(true)}
+                >
+                  Chat
+                </button>
+              </div>
+            )}
+
+            {(!chatMode || isAsk) && (
+              <div className="field">
+                <label className="field-label" htmlFor="concern">
+                  {isAsk ? 'Your Question' : 'Customer Concern'}
+                </label>
+                <textarea
+                  id="concern"
+                  className="field-textarea"
+                  placeholder={isAsk
+                    ? 'Ask about a product, process, policy, or procedure…'
+                    : 'Paste or type the customer\'s message, complaint, or question…'}
+                  value={concern}
+                  onChange={e => setConcern(e.target.value)}
+                  rows={10}
+                />
+              </div>
+            )}
 
             {!isAsk && (
               <div className="field">
@@ -242,55 +300,69 @@ export default function App() {
               </div>
             )}
 
-            <button
-              className="submit-btn"
-              type="submit"
-              disabled={loading || !concern.trim()}
-            >
-              {loading && <span className="spinner" />}
-              {loading ? 'Thinking…' : isAsk ? 'Get Answer' : 'Suggest Response'}
-            </button>
+            {(!chatMode || isAsk) && (
+              <button
+                className="submit-btn"
+                type="submit"
+                disabled={loading || !concern.trim()}
+              >
+                {loading && <span className="spinner" />}
+                {loading ? 'Thinking…' : isAsk ? 'Get Answer' : 'Suggest Response'}
+              </button>
+            )}
           </form>
 
           <div className="panel panel-right">
-            <div className="response-top">
-              <span className="field-label">{isAsk ? 'Answer' : 'Suggested Response'}</span>
-              {suggestion && (
-                <div className="response-actions">
-                  {!isAsk && (
-                    saved ? (
-                      <span className="saved-flash">&#10003; Saved</span>
-                    ) : (
-                      <button className="save-btn" type="button" onClick={handleSave}>
-                        Save as Example
+            {!isAsk && chatMode ? (
+              <Chat
+                messages={chatMessages}
+                loading={chatLoading}
+                error={chatError}
+                onSend={handleChatSend}
+                onClear={() => { setChatMessages([]); setChatError('') }}
+              />
+            ) : (
+              <>
+                <div className="response-top">
+                  <span className="field-label">{isAsk ? 'Answer' : 'Suggested Response'}</span>
+                  {suggestion && (
+                    <div className="response-actions">
+                      {!isAsk && (
+                        saved ? (
+                          <span className="saved-flash">&#10003; Saved</span>
+                        ) : (
+                          <button className="save-btn" type="button" onClick={handleSave}>
+                            Save as Example
+                          </button>
+                        )
+                      )}
+                      <button className="copy-btn" type="button" onClick={handleCopy}>
+                        {copied ? '✓ Copied' : 'Copy'}
                       </button>
-                    )
+                    </div>
                   )}
-                  <button className="copy-btn" type="button" onClick={handleCopy}>
-                    {copied ? '✓ Copied' : 'Copy'}
-                  </button>
                 </div>
-              )}
-            </div>
 
-            {error && <div className="error-box">{error}</div>}
+                {error && <div className="error-box">{error}</div>}
 
-            {!error && !suggestion && !loading && (
-              <div className="empty-state">
-                {isAsk
-                  ? 'Your answer will appear here.'
-                  : 'Your suggested response will appear here.'}
-              </div>
-            )}
+                {!error && !suggestion && !loading && (
+                  <div className="empty-state">
+                    {isAsk
+                      ? 'Your answer will appear here.'
+                      : 'Your suggested response will appear here.'}
+                  </div>
+                )}
 
-            {loading && (
-              <div className="empty-state">
-                <span className="spinner spinner--lg" />
-              </div>
-            )}
+                {loading && (
+                  <div className="empty-state">
+                    <span className="spinner spinner--lg" />
+                  </div>
+                )}
 
-            {suggestion && (
-              <div className="response-body">{suggestion}</div>
+                {suggestion && (
+                  <div className="response-body">{suggestion}</div>
+                )}
+              </>
             )}
           </div>
         </main>
