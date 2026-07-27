@@ -3,9 +3,10 @@ import './App.css'
 import coverageMap from './assets/hubble-coverage-map.png'
 import Training from './Training'
 import Sources  from './Sources'
-import Chat     from './Chat'
-import { useTraining } from './useTraining'
-import { useSources }  from './useSources'
+import Chat          from './Chat'
+import { useTraining }     from './useTraining'
+import { useSources }      from './useSources'
+import { useConnections }  from './useConnections'
 
 const TONES = [
   { id: 'professional', label: 'Professional', desc: 'Formal and polished' },
@@ -33,8 +34,9 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false)
   const [chatError, setChatError]     = useState('')
 
-  const training = useTraining()
-  const sources  = useSources()
+  const training     = useTraining()
+  const sources      = useSources()
+  const { connections, saveConnection, removeConnection } = useConnections()
 
   function switchMode(m) {
     setMode(m)
@@ -77,6 +79,8 @@ export default function App() {
           traits:           training.data.traits,
           examples:         training.data.examples.slice(0, 5),
           knowledgeContext: isAsk ? (sources.knowledgeContext || undefined) : undefined,
+          notionToken:      isAsk ? (connections.notionToken   || undefined) : undefined,
+          intercomToken:    isAsk ? (connections.intercomToken || undefined) : undefined,
         }),
       })
       const data = await res.json()
@@ -194,6 +198,9 @@ export default function App() {
           updateSource={sources.updateSource}
           activeCount={sources.activeCount}
           totalChars={sources.totalChars}
+          connections={connections}
+          onSaveConnection={saveConnection}
+          onRemoveConnection={removeConnection}
         />
       )}
 
@@ -283,7 +290,7 @@ export default function App() {
               </div>
             )}
 
-            {(training.data.examples.length > 0 || sources.activeCount > 0) && (
+            {(training.data.examples.length > 0 || sources.activeCount > 0 || (isAsk && (connections.notionToken || connections.intercomToken))) && (
               <div className="context-badges">
                 {!isAsk && training.data.examples.length > 0 && (
                   <div className="training-active-badge">
@@ -295,6 +302,18 @@ export default function App() {
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     {sources.activeCount} knowledge source{sources.activeCount !== 1 ? 's' : ''}
+                  </div>
+                )}
+                {isAsk && connections.notionToken && (
+                  <div className="training-active-badge">
+                    <span className="training-dot" />
+                    Notion workspace
+                  </div>
+                )}
+                {isAsk && connections.intercomToken && (
+                  <div className="training-active-badge">
+                    <span className="training-dot" />
+                    Intercom articles
                   </div>
                 )}
               </div>
