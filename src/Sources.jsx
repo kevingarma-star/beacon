@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import './Sources.css'
+import Connections from './Connections'
 
 const WORKER_URL = import.meta.env.VITE_WORKER_URL ?? ''
 
@@ -403,7 +404,7 @@ function SourceCard({ source, onRemove, onToggle, onResync }) {
 
 /* ── Main Sources component ──────────────────────────────── */
 
-export default function Sources({ sources, addSource, removeSource, toggleSource, updateSource, activeCount, totalChars }) {
+export default function Sources({ sources, addSource, removeSource, toggleSource, updateSource, activeCount, totalChars, connections, onSaveConnection, onRemoveConnection }) {
   const [selectedType, setSelectedType] = useState(null)
 
   function handleAdd(source) {
@@ -423,6 +424,13 @@ export default function Sources({ sources, addSource, removeSource, toggleSource
 
   return (
     <div className="sources-page">
+
+      {/* ── Workspace Connections ── */}
+      <Connections
+        connections={connections}
+        onSave={onSaveConnection}
+        onRemove={onRemoveConnection}
+      />
 
       {/* ── Stats bar ── */}
       <div className="sources-stats">

@@ -123,6 +123,8 @@ async function handleSuggest(request, env) {
     traits,
     examples = [],
     knowledgeContext,
+    notionToken,
+    intercomToken,
   } = body;
 
   if (!concern || typeof concern !== 'string' || !concern.trim()) {
@@ -133,7 +135,21 @@ async function handleSuggest(request, env) {
     return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
   }
 
-  const system = buildSystemPrompt({ mode, tones, agentName, instructions, traits, knowledgeContext });
+  // In ask mode, search live workspaces and prepend results to any manual sources
+  let combinedContext = knowledgeContext || '';
+  if (mode === 'ask' && (notionToken || intercomToken)) {
+    const [notionCtx, intercomCtx] = await Promise.all([
+      notionToken   ? searchNotionContext(concern.trim(), notionToken)     : Promise.resolve(''),
+      intercomToken ? fetchIntercomContext(concern.trim(), intercomToken)  : Promise.resolve(''),
+    ]);
+
+    const liveCtx = [notionCtx, intercomCtx].filter(Boolean).join('\n\n---\n\n');
+    combinedContext = liveCtx
+      ? liveCtx + (combinedContext ? '\n\n---\n\n' + combinedContext : '')
+      : combinedContext;
+  }
+
+  const system = buildSystemPrompt({ mode, tones, agentName, instructions, traits, knowledgeContext: combinedContext });
 
   // Build messages — inject few-shot examples before the real concern (reply mode only)
   const messages = [];
@@ -243,6 +259,88 @@ async function handleChat(request, env) {
   const data = await anthropicRes.json();
   const message = data.content?.[0]?.text ?? '';
   return corsResponse(JSON.stringify({ message }));
+}
+
+/* ── Live workspace search helpers ──────────────────────── */
+
+async function searchNotionContext(query, token) {
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Notion-Version': '2022-06-28',
+    'Content-Type': 'application/json',
+  };
+
+  let searchData;
+  try {
+    const res = await fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query,
+        filter: { value: 'page', property: 'object' },
+        sort: { direction: 'descending', timestamp: 'relevance' },
+        page_size: 4,
+      }),
+    });
+    if (!res.ok) return '';
+    searchData = await res.json();
+  } catch {
+    return '';
+  }
+
+  const pages = searchData.results || [];
+  const sections = [];
+
+  for (const page of pages.slice(0, 4)) {
+    try {
+      const title   = extractNotionTitle(page);
+      const content = await extractNotionContent(page.id, headers, 0, { n: 0 });
+      if (content.trim()) {
+        sections.push(`### ${title}\n${content.slice(0, 6000)}`);
+      }
+    } catch {
+      // skip pages that fail
+    }
+  }
+
+  return sections.join('\n\n---\n\n');
+}
+
+async function fetchIntercomContext(query, token) {
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Accept': 'application/json',
+    'Intercom-Version': '2.13',
+  };
+
+  let articles = [];
+  try {
+    const res = await fetch('https://api.intercom.io/articles?per_page=50', { headers });
+    if (!res.ok) return '';
+    const data = await res.json();
+    articles = (data.data || []).filter(a => a.state === 'published');
+  } catch {
+    return '';
+  }
+
+  if (!articles.length) return '';
+
+  // Score by keyword relevance
+  const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+  function score(article) {
+    const text = `${article.title} ${stripHtml(article.body || '')}`.toLowerCase();
+    return queryWords.reduce((n, word) => n + (text.includes(word) ? 1 : 0), 0);
+  }
+
+  const ranked = articles
+    .map(a => ({ ...a, _score: score(a) }))
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 5);
+
+  return ranked
+    .map(a => `### ${a.title}\n${stripHtml(a.body || '').slice(0, 3000)}`)
+    .join('\n\n---\n\n');
 }
 
 /* ── /fetch-source ───────────────────────────────────────── */
