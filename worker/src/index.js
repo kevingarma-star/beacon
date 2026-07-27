@@ -510,6 +510,28 @@ async function handleFetchSource(request, env) {
   return corsResponse(JSON.stringify({ error: `Unknown source type: ${type}` }), 400);
 }
 
+/* ── /training ───────────────────────────────────────────── */
+
+const TRAINING_KEY = 'shared';
+
+async function handleGetTraining(env) {
+  const raw = await env.TRAINING_KV.get(TRAINING_KEY);
+  if (!raw) return corsResponse(JSON.stringify(null));
+  return corsResponse(raw);
+}
+
+async function handlePutTraining(request, env) {
+  let body;
+  try {
+    body = await request.text();
+    JSON.parse(body); // validate JSON
+  } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+  await env.TRAINING_KV.put(TRAINING_KEY, body);
+  return corsResponse(JSON.stringify({ ok: true }));
+}
+
 /* ── Router ──────────────────────────────────────────────── */
 
 export default {
@@ -522,6 +544,14 @@ export default {
 
     if (pathname === '/health' && request.method === 'GET') {
       return corsResponse(JSON.stringify({ ok: true }));
+    }
+
+    if (pathname === '/training' && request.method === 'GET') {
+      return handleGetTraining(env);
+    }
+
+    if (pathname === '/training' && request.method === 'PUT') {
+      return handlePutTraining(request, env);
     }
 
     if (pathname === '/suggest' && request.method === 'POST') {

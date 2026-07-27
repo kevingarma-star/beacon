@@ -3,7 +3,8 @@ import './App.css'
 import coverageMap from './assets/hubble-coverage-map.png'
 import Training from './Training'
 import Sources  from './Sources'
-import Chat          from './Chat'
+import Chat             from './Chat'
+import QuickTraining    from './QuickTraining'
 import { useTraining }     from './useTraining'
 import { useSources }      from './useSources'
 import { useConnections }  from './useConnections'
@@ -288,6 +289,14 @@ export default function App() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {!isAsk && (!chatMode) && (
+              <QuickTraining
+                examples={training.data.examples}
+                addExample={training.addExample}
+                removeExample={training.removeExample}
+              />
             )}
 
             {(training.data.examples.length > 0 || sources.activeCount > 0 || (isAsk && (connections.notionToken || connections.intercomToken))) && (

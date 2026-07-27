@@ -2,6 +2,10 @@ name = "beacon-worker"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
+[[kv_namespaces]]
+binding = "TRAINING_KV"
+id      = "96d0e9387d504b41911fece47da41eb7"
+
 [vars]
 # ANTHROPIC_API_KEY is set via: wrangler secret put ANTHROPIC_API_KEY
 # For local dev, add it to .dev.vars (gitignored)
