@@ -1,15 +1,16 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 
-const KEY = 'beacon-training-v1'
+const KEY         = 'beacon-training-v1'
+const WORKER_URL  = import.meta.env.VITE_WORKER_URL ?? ''
 
 const defaults = {
-  agentName: '',
+  agentName:    '',
   instructions: '',
-  traits: { empathy: 60, formality: 60, length: 50 },
-  examples: [],
+  traits:       { empathy: 60, formality: 60, length: 50 },
+  examples:     [],
 }
 
-function load() {
+function loadLocal() {
   try {
     const raw = localStorage.getItem(KEY)
     return raw ? { ...defaults, ...JSON.parse(raw) } : { ...defaults }
@@ -18,13 +19,47 @@ function load() {
   }
 }
 
+function saveLocal(data) {
+  try { localStorage.setItem(KEY, JSON.stringify(data)) } catch { /* ignore */ }
+}
+
 export function useTraining() {
-  const [data, setData] = useState(load)
+  const [data, setData]     = useState(loadLocal)
+  const [synced, setSynced] = useState(false)
+  const saveTimer           = useRef(null)
+
+  // On mount: fetch latest from the worker and merge over the local cache
+  useEffect(() => {
+    fetch(`${WORKER_URL}/training`)
+      .then(r => r.ok ? r.json() : null)
+      .then(remote => {
+        if (remote) {
+          const merged = { ...defaults, ...remote }
+          setData(merged)
+          saveLocal(merged)
+        }
+        setSynced(true)
+      })
+      .catch(() => setSynced(true)) // fall back to local if worker is unreachable
+  }, [])
+
+  // Debounced save to worker — fires 800 ms after the last change
+  function persistRemote(next) {
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      fetch(`${WORKER_URL}/training`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(next),
+      }).catch(() => { /* silent — local copy is still intact */ })
+    }, 800)
+  }
 
   const update = useCallback(patch => {
     setData(prev => {
       const next = typeof patch === 'function' ? patch(prev) : { ...prev, ...patch }
-      localStorage.setItem(KEY, JSON.stringify(next))
+      saveLocal(next)
+      persistRemote(next)
       return next
     })
   }, [])
@@ -40,12 +75,11 @@ export function useTraining() {
     update(prev => ({ ...prev, examples: prev.examples.filter(e => e.id !== id) }))
   }, [update])
 
-  // Persona worth up to 30pts, each example worth 7pts (max 10 examples = 70pts)
   const score = Math.min(
     (data.instructions.trim().length > 20 ? 30 : data.instructions.trim().length > 0 ? 10 : 0) +
     Math.min(data.examples.length * 7, 70),
     100
   )
 
-  return { data, update, addExample, removeExample, score }
+  return { data, update, addExample, removeExample, score, synced }
 }
