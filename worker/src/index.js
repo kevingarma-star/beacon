@@ -101,6 +101,10 @@ Keep it concise and focused.`;
     system += `\n\n## Style Guidelines\nEmpathy: ${empStr}. Formality: ${fmlStr}. Length: ${lenStr}.`;
   }
 
+  if (knowledgeContext?.trim()) {
+    system += `\n\n## Help Center & Knowledge Reference\nThe following articles and sources may be relevant to the customer's concern. Reference this information in your reply if it applies — use it to give accurate answers about products, policies, or processes. Write in your own voice; do not copy-paste.\n\n${knowledgeContext.trim().slice(0, 12000)}`;
+  }
+
   return system;
 }
 
@@ -135,9 +139,9 @@ async function handleSuggest(request, env) {
     return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
   }
 
-  // In ask mode, search live workspaces and prepend results to any manual sources
+  // Search live workspaces and prepend results to any manual sources (all modes)
   let combinedContext = knowledgeContext || '';
-  if (mode === 'ask' && (notionToken || intercomToken)) {
+  if (notionToken || intercomToken) {
     const [notionCtx, intercomCtx] = await Promise.all([
       notionToken   ? searchNotionContext(concern.trim(), notionToken)     : Promise.resolve(''),
       intercomToken ? fetchIntercomContext(concern.trim(), intercomToken)  : Promise.resolve(''),
@@ -198,7 +202,10 @@ async function handleChat(request, env) {
     return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
   }
 
-  const { messages = [], tones = ['professional'], agentName, instructions, traits } = body;
+  const {
+    messages = [], tones = ['professional'], agentName, instructions, traits,
+    knowledgeContext, notionToken, intercomToken,
+  } = body;
 
   if (!messages.length || messages[messages.length - 1].role !== 'user') {
     return corsResponse(JSON.stringify({ error: 'messages must end with a user turn' }), 400);
@@ -206,6 +213,20 @@ async function handleChat(request, env) {
 
   if (!env.ANTHROPIC_API_KEY) {
     return corsResponse(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), 500);
+  }
+
+  // Search live workspaces based on the latest user message
+  let combinedContext = knowledgeContext || '';
+  if (notionToken || intercomToken) {
+    const latestQuery = messages[messages.length - 1].content;
+    const [notionCtx, intercomCtx] = await Promise.all([
+      notionToken   ? searchNotionContext(latestQuery, notionToken)    : Promise.resolve(''),
+      intercomToken ? fetchIntercomContext(latestQuery, intercomToken) : Promise.resolve(''),
+    ]);
+    const liveCtx = [notionCtx, intercomCtx].filter(Boolean).join('\n\n---\n\n');
+    combinedContext = liveCtx
+      ? liveCtx + (combinedContext ? '\n\n---\n\n' + combinedContext : '')
+      : combinedContext;
   }
 
   const tonePrompt = buildTonePrompt(tones);
@@ -234,6 +255,10 @@ async function handleChat(request, env) {
                   : length   < 30 ? 'brief — one or two sentences maximum'
                   : 'concise but complete';
     system += `\n\n## Style Guidelines\nEmpathy: ${empStr}. Formality: ${fmlStr}. Length: ${lenStr}.`;
+  }
+
+  if (combinedContext?.trim()) {
+    system += `\n\n## Help Center & Knowledge Reference\nThe following articles and sources may be relevant. Reference them in your draft reply if they apply:\n\n${combinedContext.trim().slice(0, 12000)}`;
   }
 
   const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
