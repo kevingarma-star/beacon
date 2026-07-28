@@ -304,7 +304,7 @@ async function searchNotionContext(query, token) {
         query,
         filter: { value: 'page', property: 'object' },
         sort: { direction: 'descending', timestamp: 'relevance' },
-        page_size: 4,
+        page_size: 6,
       }),
     });
     if (!res.ok) return '';
@@ -316,7 +316,7 @@ async function searchNotionContext(query, token) {
   const pages = searchData.results || [];
   const sections = [];
 
-  for (const page of pages.slice(0, 4)) {
+  for (const page of pages.slice(0, 6)) {
     try {
       const title   = extractNotionTitle(page);
       const content = await extractNotionContent(page.id, headers, 0, { n: 0 });
@@ -339,32 +339,49 @@ async function fetchIntercomContext(query, token) {
   };
 
   let articles = [];
+
+  // Primary: Intercom's native search API — uses their relevance ranking, far more accurate
+  // than fetching a flat list and doing keyword counting ourselves
   try {
-    const res = await fetch('https://api.intercom.io/articles?per_page=50', { headers });
-    if (!res.ok) return '';
-    const data = await res.json();
-    articles = (data.data || []).filter(a => a.state === 'published');
+    const searchRes = await fetch(
+      `https://api.intercom.io/articles/search?phrase=${encodeURIComponent(query)}&state=published&per_page=10`,
+      { headers }
+    );
+    if (searchRes.ok) {
+      const data = await searchRes.json();
+      articles = (data.data || []).filter(a => !a.state || a.state === 'published');
+    }
   } catch {
-    return '';
+    // fall through to list fallback
+  }
+
+  // Fallback: paginated list + keyword scoring (covers API plan differences)
+  if (!articles.length) {
+    try {
+      const [p1, p2] = await Promise.all([
+        fetch('https://api.intercom.io/articles?per_page=50&page=1', { headers }).then(r => r.ok ? r.json() : {}),
+        fetch('https://api.intercom.io/articles?per_page=50&page=2', { headers }).then(r => r.ok ? r.json() : {}),
+      ]);
+      const all = [...(p1.data || []), ...(p2.data || [])].filter(a => a.state === 'published');
+
+      if (all.length) {
+        const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        function score(a) {
+          const text = `${a.title} ${stripHtml(a.body || '')}`.toLowerCase();
+          return words.reduce((n, w) => n + (text.includes(w) ? 1 : 0), 0);
+        }
+        articles = all.map(a => ({ ...a, _score: score(a) })).sort((a, b) => b._score - a._score);
+      }
+    } catch {
+      return '';
+    }
   }
 
   if (!articles.length) return '';
 
-  // Score by keyword relevance
-  const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-
-  function score(article) {
-    const text = `${article.title} ${stripHtml(article.body || '')}`.toLowerCase();
-    return queryWords.reduce((n, word) => n + (text.includes(word) ? 1 : 0), 0);
-  }
-
-  const ranked = articles
-    .map(a => ({ ...a, _score: score(a) }))
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 5);
-
-  return ranked
-    .map(a => `### ${a.title}\n${stripHtml(a.body || '').slice(0, 3000)}`)
+  return articles
+    .slice(0, 8)
+    .map(a => `### ${a.title}\n${stripHtml(a.body || '').slice(0, 4000)}`)
     .join('\n\n---\n\n');
 }
 
