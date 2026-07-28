@@ -79,9 +79,9 @@ export default function App() {
           instructions:     training.data.instructions || undefined,
           traits:           training.data.traits,
           examples:         training.data.examples.slice(0, 5),
-          knowledgeContext: isAsk ? (sources.knowledgeContext || undefined) : undefined,
-          notionToken:      isAsk ? (connections.notionToken   || undefined) : undefined,
-          intercomToken:    isAsk ? (connections.intercomToken || undefined) : undefined,
+          knowledgeContext: sources.knowledgeContext   || undefined,
+          notionToken:      connections.notionToken    || undefined,
+          intercomToken:    connections.intercomToken  || undefined,
         }),
       })
       const data = await res.json()
@@ -119,11 +119,14 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages:     nextMsgs,
+          messages:         nextMsgs,
           tones,
-          agentName:    training.data.agentName    || undefined,
-          instructions: training.data.instructions || undefined,
-          traits:       training.data.traits,
+          agentName:        training.data.agentName    || undefined,
+          instructions:     training.data.instructions || undefined,
+          traits:           training.data.traits,
+          knowledgeContext: sources.knowledgeContext   || undefined,
+          notionToken:      connections.notionToken    || undefined,
+          intercomToken:    connections.intercomToken  || undefined,
         }),
       })
       const data = await res.json()
@@ -299,7 +302,7 @@ export default function App() {
               />
             )}
 
-            {(training.data.examples.length > 0 || sources.activeCount > 0 || (isAsk && (connections.notionToken || connections.intercomToken))) && (
+            {((!isAsk && training.data.examples.length > 0) || sources.activeCount > 0 || connections.notionToken || connections.intercomToken) && (
               <div className="context-badges">
                 {!isAsk && training.data.examples.length > 0 && (
                   <div className="training-active-badge">
@@ -307,19 +310,19 @@ export default function App() {
                     {training.data.examples.length} training example{training.data.examples.length !== 1 ? 's' : ''}
                   </div>
                 )}
-                {isAsk && sources.activeCount > 0 && (
+                {sources.activeCount > 0 && (
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     {sources.activeCount} knowledge source{sources.activeCount !== 1 ? 's' : ''}
                   </div>
                 )}
-                {isAsk && connections.notionToken && (
+                {connections.notionToken && (
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     Notion workspace
                   </div>
                 )}
-                {isAsk && connections.intercomToken && (
+                {connections.intercomToken && (
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     Intercom articles
