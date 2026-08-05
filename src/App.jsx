@@ -8,6 +8,7 @@ import QuickTraining    from './QuickTraining'
 import { useTraining }     from './useTraining'
 import { useSources }      from './useSources'
 import { useConnections }  from './useConnections'
+import NotionSearch        from './NotionSearch'
 
 const TONES = [
   { id: 'professional', label: 'Professional', desc: 'Formal and polished' },
@@ -179,6 +180,12 @@ export default function App() {
                 <span className="nav-badge">{sources.activeCount}</span>
               )}
             </button>
+            <button
+              className={`nav-tab${view === 'search' ? ' nav-tab--active' : ''}`}
+              onClick={() => setView('search')}
+            >
+              Search
+            </button>
           </nav>
         </div>
       </header>
@@ -205,6 +212,13 @@ export default function App() {
           connections={connections}
           onSaveConnection={saveConnection}
           onRemoveConnection={removeConnection}
+        />
+      )}
+
+      {view === 'search' && (
+        <NotionSearch
+          connections={connections}
+          addSource={sources.addSource}
         />
       )}
 

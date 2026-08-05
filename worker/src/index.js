@@ -295,9 +295,9 @@ async function searchNotionContext(query, token) {
     'Content-Type': 'application/json',
   };
 
-  let searchData;
-  try {
-    const res = await fetch('https://api.notion.com/v1/search', {
+  // Run page search + database discovery in parallel
+  const [pageResult, dbResult] = await Promise.allSettled([
+    fetch('https://api.notion.com/v1/search', {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -306,17 +306,57 @@ async function searchNotionContext(query, token) {
         sort: { direction: 'descending', timestamp: 'relevance' },
         page_size: 6,
       }),
-    });
-    if (!res.ok) return '';
-    searchData = await res.json();
-  } catch {
-    return '';
+    }).then(r => r.ok ? r.json() : null),
+
+    fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        filter: { value: 'database', property: 'object' },
+        page_size: 10,
+      }),
+    }).then(r => r.ok ? r.json() : null),
+  ]);
+
+  const pageResults  = pageResult.status  === 'fulfilled' && pageResult.value  ? pageResult.value.results  || [] : [];
+  const databases    = dbResult.status    === 'fulfilled' && dbResult.value    ? (dbResult.value.results   || []).slice(0, 5) : [];
+
+  // Database fallback: query each accessible DB for pages whose title matches the query
+  const existingIds = new Set(pageResults.map(p => p.id));
+  const words       = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  let dbPages = [];
+
+  if (databases.length > 0 && words.length > 0) {
+    const buckets = await Promise.all(databases.map(async db => {
+      try {
+        const r = await fetch(`https://api.notion.com/v1/databases/${db.id}/query`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ page_size: 20 }),
+        });
+        if (!r.ok) return [];
+        const { results = [] } = await r.json();
+        return results
+          .map(p => {
+            const title = extractNotionTitle(p).toLowerCase();
+            const score = words.reduce((n, w) => n + (title.includes(w) ? 1 : 0), 0);
+            return { ...p, _score: score };
+          })
+          .filter(p => p._score > 0 && !existingIds.has(p.id))
+          .sort((a, b) => b._score - a._score)
+          .slice(0, 2);
+      } catch {
+        return [];
+      }
+    }));
+    dbPages = buckets.flat();
   }
 
-  const pages = searchData.results || [];
+  // Merge: page search first, then DB matches that weren't already found; cap at 6 total
+  const pages    = [...pageResults, ...dbPages].slice(0, 6);
   const sections = [];
 
-  for (const page of pages.slice(0, 6)) {
+  for (const page of pages) {
     try {
       const title   = extractNotionTitle(page);
       const content = await extractNotionContent(page.id, headers, 0, { n: 0 });
@@ -383,6 +423,84 @@ async function fetchIntercomContext(query, token) {
     .slice(0, 8)
     .map(a => `### ${a.title}\n${stripHtml(a.body || '').slice(0, 4000)}`)
     .join('\n\n---\n\n');
+}
+
+/* ── /notion-search ─────────────────────────────────────── */
+
+async function handleNotionSearch(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+
+  const { query, notionToken } = body;
+  const token = notionToken || env.NOTION_TOKEN;
+
+  if (!token) {
+    return corsResponse(JSON.stringify({ error: 'Notion token required' }), 400);
+  }
+  if (!query?.trim()) {
+    return corsResponse(JSON.stringify({ error: 'query is required' }), 400);
+  }
+
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Notion-Version': '2022-06-28',
+    'Content-Type': 'application/json',
+  };
+
+  let searchData;
+  try {
+    const res = await fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        query: query.trim(),
+        filter: { value: 'page', property: 'object' },
+        sort: { direction: 'descending', timestamp: 'relevance' },
+        page_size: 10,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      return corsResponse(JSON.stringify({ error: err.message || 'Notion search failed' }), 502);
+    }
+    searchData = await res.json();
+  } catch (err) {
+    return corsResponse(JSON.stringify({ error: `Notion search error: ${err.message}` }), 502);
+  }
+
+  const pages = (searchData.results || []).slice(0, 10);
+
+  // Fetch a brief snippet (first 5 blocks) for each page in parallel
+  const results = await Promise.all(pages.map(async page => {
+    const title = extractNotionTitle(page);
+    const url   = page.url || `https://notion.so/${page.id.replace(/-/g, '')}`;
+
+    let snippet = '';
+    try {
+      const blocksRes = await fetch(
+        `https://api.notion.com/v1/blocks/${page.id}/children?page_size=5`,
+        { headers }
+      );
+      if (blocksRes.ok) {
+        const blocksData = await blocksRes.json();
+        snippet = (blocksData.results || [])
+          .map(b => blockToLine(b, 0))
+          .filter(Boolean)
+          .join(' ')
+          .slice(0, 280);
+      }
+    } catch {
+      // snippet stays empty — not fatal
+    }
+
+    return { id: page.id, title, url, snippet, lastEdited: page.last_edited_time };
+  }));
+
+  return corsResponse(JSON.stringify({ results }));
 }
 
 /* ── /fetch-source ───────────────────────────────────────── */
@@ -594,6 +712,10 @@ export default {
 
     if (pathname === '/training' && request.method === 'PUT') {
       return handlePutTraining(request, env);
+    }
+
+    if (pathname === '/notion-search' && request.method === 'POST') {
+      return handleNotionSearch(request, env);
     }
 
     if (pathname === '/suggest' && request.method === 'POST') {
