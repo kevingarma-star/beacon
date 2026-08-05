@@ -358,10 +358,12 @@ async function searchNotionContext(query, token) {
 
   for (const page of pages) {
     try {
-      const title   = extractNotionTitle(page);
-      const content = await extractNotionContent(page.id, headers, 0, { n: 0 });
-      if (content.trim()) {
-        sections.push(`### ${title}\n${content.slice(0, 6000)}`);
+      const title  = extractNotionTitle(page);
+      const props  = extractNotionProperties(page);          // database column values
+      const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 });
+      const body   = [props, blocks].filter(Boolean).join('\n\n');
+      if (body.trim()) {
+        sections.push(`### ${title}\n${body.slice(0, 6000)}`);
       }
     } catch {
       // skip pages that fail
@@ -479,7 +481,9 @@ async function handleNotionSearch(request, env) {
     const title = extractNotionTitle(page);
     const url   = page.url || `https://notion.so/${page.id.replace(/-/g, '')}`;
 
-    let snippet = '';
+    // Build snippet: property values first (most useful for spec lookups), then first blocks
+    const propSnippet = extractNotionProperties(page).slice(0, 140);
+    let blockSnippet = '';
     try {
       const blocksRes = await fetch(
         `https://api.notion.com/v1/blocks/${page.id}/children?page_size=5`,
@@ -487,15 +491,16 @@ async function handleNotionSearch(request, env) {
       );
       if (blocksRes.ok) {
         const blocksData = await blocksRes.json();
-        snippet = (blocksData.results || [])
+        blockSnippet = (blocksData.results || [])
           .map(b => blockToLine(b, 0))
           .filter(Boolean)
           .join(' ')
-          .slice(0, 280);
+          .slice(0, 200);
       }
     } catch {
-      // snippet stays empty — not fatal
+      // block snippet stays empty — not fatal
     }
+    const snippet = [propSnippet, blockSnippet].filter(Boolean).join('  ·  ').slice(0, 280);
 
     return { id: page.id, title, url, snippet, lastEdited: page.last_edited_time };
   }));
@@ -517,6 +522,59 @@ function extractNotionPageId(url) {
   const id  = seg.split('-').pop();
   if (id && id.length >= 32) return id.slice(0, 32);
   return null;
+}
+
+// Extracts all non-title property values from a database page entry.
+// Database rows store specs (dimensions, weight, etc.) in properties, not blocks —
+// without this, that structured data is invisible to the AI.
+function extractNotionProperties(page) {
+  const props = page.properties || {};
+  const lines = [];
+
+  for (const [key, prop] of Object.entries(props)) {
+    if (prop.type === 'title') continue; // already used as the page title
+    let value = '';
+    switch (prop.type) {
+      case 'rich_text':
+        value = (prop.rich_text || []).map(t => t.plain_text).join('');
+        break;
+      case 'number':
+        value = prop.number != null ? String(prop.number) : '';
+        break;
+      case 'select':
+        value = prop.select?.name || '';
+        break;
+      case 'multi_select':
+        value = (prop.multi_select || []).map(s => s.name).join(', ');
+        break;
+      case 'status':
+        value = prop.status?.name || '';
+        break;
+      case 'checkbox':
+        value = prop.checkbox ? 'Yes' : 'No';
+        break;
+      case 'date':
+        value = prop.date?.start || '';
+        break;
+      case 'url':
+        value = prop.url || '';
+        break;
+      case 'email':
+        value = prop.email || '';
+        break;
+      case 'phone_number':
+        value = prop.phone_number || '';
+        break;
+      case 'formula':
+        value = prop.formula?.string ?? (prop.formula?.number != null ? String(prop.formula.number) : '');
+        break;
+      default:
+        break;
+    }
+    if (value.toString().trim()) lines.push(`${key}: ${value.toString().trim()}`);
+  }
+
+  return lines.join('\n');
 }
 
 function extractNotionTitle(pageData) {
@@ -659,7 +717,9 @@ async function handleFetchSource(request, env) {
 
       const pageData = await pageRes.json();
       const title    = extractNotionTitle(pageData);
-      const content  = await extractNotionContent(pageId, headers);
+      const props    = extractNotionProperties(pageData);    // database column values
+      const blocks   = await extractNotionContent(pageId, headers);
+      const content  = [props, blocks].filter(Boolean).join('\n\n');
 
       return corsResponse(JSON.stringify({ title, content: content.slice(0, 30000) }));
     } catch (err) {
