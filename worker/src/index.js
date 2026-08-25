@@ -143,8 +143,8 @@ async function handleSuggest(request, env) {
   let combinedContext = knowledgeContext || '';
   if (notionToken || intercomToken) {
     const [notionCtx, intercomCtx] = await Promise.all([
-      notionToken   ? searchNotionContext(concern.trim(), notionToken)     : Promise.resolve(''),
-      intercomToken ? fetchIntercomContext(concern.trim(), intercomToken)  : Promise.resolve(''),
+      notionToken   ? searchNotionContext(concern.trim(), notionToken, env)    : Promise.resolve(''),
+      intercomToken ? fetchIntercomContext(concern.trim(), intercomToken)       : Promise.resolve(''),
     ]);
 
     const liveCtx = [notionCtx, intercomCtx].filter(Boolean).join('\n\n---\n\n');
@@ -220,8 +220,8 @@ async function handleChat(request, env) {
   if (notionToken || intercomToken) {
     const latestQuery = messages[messages.length - 1].content;
     const [notionCtx, intercomCtx] = await Promise.all([
-      notionToken   ? searchNotionContext(latestQuery, notionToken)    : Promise.resolve(''),
-      intercomToken ? fetchIntercomContext(latestQuery, intercomToken) : Promise.resolve(''),
+      notionToken   ? searchNotionContext(latestQuery, notionToken, env)    : Promise.resolve(''),
+      intercomToken ? fetchIntercomContext(latestQuery, intercomToken)       : Promise.resolve(''),
     ]);
     const liveCtx = [notionCtx, intercomCtx].filter(Boolean).join('\n\n---\n\n');
     combinedContext = liveCtx
@@ -288,12 +288,47 @@ async function handleChat(request, env) {
 
 /* ── Live workspace search helpers ──────────────────────── */
 
-async function searchNotionContext(query, token) {
+async function searchNotionContext(query, token, env) {
   const headers = {
     'Authorization': `Bearer ${token}`,
     'Notion-Version': '2022-06-28',
     'Content-Type': 'application/json',
   };
+
+  // === Full-workspace index path (preferred) ===
+  // If the user has run "Sync Workspace", use the local KV index to score ALL pages
+  // by keyword match on title + content snippet, then fetch full content for top hits.
+  if (env?.TRAINING_KV) {
+    try {
+      const raw = await env.TRAINING_KV.get(NOTION_INDEX_KEY);
+      if (raw) {
+        const { pages = [] } = JSON.parse(raw);
+        const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+        const scored = pages
+          .map(p => {
+            const text  = `${p.title} ${p.snippet || ''}`.toLowerCase();
+            const score = words.reduce((n, w) => n + (text.includes(w) ? 1 : 0), 0);
+            return { ...p, score };
+          })
+          .sort((a, b) => b.score - a.score);
+
+        const topMatches = scored.filter(p => p.score > 0).slice(0, 6);
+        if (topMatches.length > 0) {
+          const sections = [];
+          for (const page of topMatches) {
+            try {
+              const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 }, query);
+              if (blocks.trim()) sections.push(`### ${page.title}\n${blocks.slice(0, 6000)}`);
+            } catch { /* skip */ }
+          }
+          if (sections.length > 0) return sections.join('\n\n---\n\n');
+        }
+        // Index exists but nothing scored — fall through to live search
+      }
+    } catch { /* fall through to live search on any KV error */ }
+  }
+  // === End index path; live search below is the fallback ===
 
   // Run page search + database discovery in parallel
   const [pageResult, dbResult] = await Promise.allSettled([
@@ -336,15 +371,18 @@ async function searchNotionContext(query, token) {
         });
         if (!r.ok) return [];
         const { results = [] } = await r.json();
-        return results
+        const scored = results
           .map(p => {
             const title = extractNotionTitle(p).toLowerCase();
             const score = words.reduce((n, w) => n + (title.includes(w) ? 1 : 0), 0);
             return { ...p, _score: score };
           })
-          .filter(p => p._score > 0 && !existingIds.has(p.id))
-          .sort((a, b) => b._score - a._score)
-          .slice(0, 2);
+          .filter(p => !existingIds.has(p.id))
+          .sort((a, b) => b._score - a._score);
+        // Prefer keyword-matched articles; fall back to top 1 if nothing scores —
+        // ensures KB content is always surfaced even when titles don't match query terms
+        const matched = scored.filter(p => p._score > 0).slice(0, 2);
+        return matched.length ? matched : scored.slice(0, 1);
       } catch {
         return [];
       }
@@ -360,7 +398,7 @@ async function searchNotionContext(query, token) {
     try {
       const title  = extractNotionTitle(page);
       const props  = extractNotionProperties(page);          // database column values
-      const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 });
+      const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 }, query);
       const body   = [props, blocks].filter(Boolean).join('\n\n');
       if (body.trim()) {
         sections.push(`### ${title}\n${body.slice(0, 6000)}`);
@@ -614,9 +652,53 @@ function blockToLine(block, depth) {
   }
 }
 
+// Queries an inline (child_database) block for relevant rows and returns their content.
+// Falls back to top articles when no title keyword matches — ensures KB content always surfaces.
+async function fetchChildDatabaseContent(dbId, headers, query, depth, blockCount) {
+  const MAX_BLOCKS = 500;
+  try {
+    const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ page_size: 20 }),
+    });
+    if (!res.ok) return '';
+    const { results = [] } = await res.json();
+    if (!results.length) return '';
+
+    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const scored = results
+      .map(p => {
+        const title = extractNotionTitle(p).toLowerCase();
+        const score = words.reduce((n, w) => n + (title.includes(w) ? 1 : 0), 0);
+        return { ...p, _score: score };
+      })
+      .sort((a, b) => b._score - a._score);
+
+    // Take top keyword-matched articles; fall back to first 3 if nothing scores
+    const top = scored[0]?._score > 0
+      ? scored.filter(p => p._score > 0).slice(0, 4)
+      : scored.slice(0, 3);
+
+    const sections = [];
+    for (const page of top) {
+      if (blockCount.n >= MAX_BLOCKS) break;
+      const title   = extractNotionTitle(page);
+      const props   = extractNotionProperties(page);
+      const content = await extractNotionContent(page.id, headers, depth, blockCount, query);
+      const body    = [props, content].filter(Boolean).join('\n\n');
+      if (body.trim()) sections.push(`### ${title}\n${body.slice(0, 3000)}`);
+    }
+    return sections.join('\n\n');
+  } catch {
+    return '';
+  }
+}
+
 // Fetches ALL blocks for a given blockId — paginates until done, recurses into children.
 // depth + blockCount guard against runaway pages.
-async function extractNotionContent(blockId, headers, depth = 0, blockCount = { n: 0 }) {
+// query is passed through so child_database blocks can score their rows relevantly.
+async function extractNotionContent(blockId, headers, depth = 0, blockCount = { n: 0 }, query = '') {
   const MAX_DEPTH  = 5;
   const MAX_BLOCKS = 500;
   if (depth > MAX_DEPTH || blockCount.n >= MAX_BLOCKS) return '';
@@ -632,11 +714,27 @@ async function extractNotionContent(blockId, headers, depth = 0, blockCount = { 
 
     for (const block of (data.results || [])) {
       if (blockCount.n++ >= MAX_BLOCKS) break;
-      const line = blockToLine(block, depth);
-      if (line.trim()) lines.push(line);
 
-      if (block.has_children) {
-        const child = await extractNotionContent(block.id, headers, depth + 1, blockCount);
+      // Inline databases need a /query call, not /blocks/children — handle them explicitly
+      if (block.type === 'child_database' && depth < 3) {
+        const dbTitle = block.child_database?.title;
+        if (dbTitle) lines.push(`## ${dbTitle}`);
+        const dbContent = await fetchChildDatabaseContent(block.id, headers, query, depth + 1, blockCount);
+        if (dbContent) lines.push(dbContent);
+        continue;
+      }
+
+      // Emit title for child pages so the heading appears even before recursing
+      if (block.type === 'child_page') {
+        const pageTitle = block.child_page?.title;
+        if (pageTitle) lines.push(`## ${pageTitle}`);
+      } else {
+        const line = blockToLine(block, depth);
+        if (line.trim()) lines.push(line);
+      }
+
+      if (block.has_children && block.type !== 'child_database') {
+        const child = await extractNotionContent(block.id, headers, depth + 1, blockCount, query);
         if (child) lines.push(child);
       }
     }
@@ -730,9 +828,99 @@ async function handleFetchSource(request, env) {
   return corsResponse(JSON.stringify({ error: `Unknown source type: ${type}` }), 400);
 }
 
+/* ── /notion-sync ────────────────────────────────────────── */
+
+// Crawls ALL accessible Notion pages and stores a full-text index in KV.
+// At query time we score the entire index locally — no more missing articles.
+async function handleNotionSyncAll(request, env) {
+  let body;
+  try { body = await request.json(); } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON' }), 400);
+  }
+
+  const { notionToken } = body;
+  if (!notionToken) return corsResponse(JSON.stringify({ error: 'notionToken required' }), 400);
+  if (!env.TRAINING_KV) return corsResponse(JSON.stringify({ error: 'KV not configured' }), 500);
+
+  const headers = {
+    'Authorization': `Bearer ${notionToken}`,
+    'Notion-Version': '2022-06-28',
+    'Content-Type': 'application/json',
+  };
+
+  // Step 1: Paginate through ALL accessible pages (no query = all pages by recency)
+  const allPages = [];
+  let cursor = undefined;
+  do {
+    const res = await fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        filter: { value: 'page', property: 'object' },
+        sort: { direction: 'descending', timestamp: 'last_edited_time' },
+        page_size: 100,
+        ...(cursor ? { start_cursor: cursor } : {}),
+      }),
+    });
+    if (!res.ok) break;
+    const data = await res.json();
+    allPages.push(...(data.results || []));
+    cursor = data.has_more ? data.next_cursor : undefined;
+  } while (cursor && allPages.length < 300);
+
+  // Step 2: Fetch shallow content in parallel batches of 10
+  const BATCH = 10;
+  const indexed = [];
+
+  for (let i = 0; i < allPages.length; i += BATCH) {
+    const batch = allPages.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map(async page => {
+      const title  = extractNotionTitle(page);
+      const props  = extractNotionProperties(page);
+      let blockText = '';
+      try {
+        const res = await fetch(
+          `https://api.notion.com/v1/blocks/${page.id}/children?page_size=30`,
+          { headers }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          blockText = (data.results || [])
+            .map(b => blockToLine(b, 0))
+            .filter(Boolean)
+            .join('\n')
+            .slice(0, 1200);
+        }
+      } catch { /* skip failed pages */ }
+      const snippet = [props, blockText].filter(Boolean).join('\n').slice(0, 1200);
+      return { id: page.id, title, snippet };
+    }));
+    indexed.push(...results);
+  }
+
+  // Step 3: Persist index in KV
+  const index = { syncedAt: new Date().toISOString(), pages: indexed };
+  await env.TRAINING_KV.put(NOTION_INDEX_KEY, JSON.stringify(index));
+
+  return corsResponse(JSON.stringify({ ok: true, count: indexed.length, syncedAt: index.syncedAt }));
+}
+
+async function handleNotionSyncStatus(env) {
+  if (!env.TRAINING_KV) return corsResponse(JSON.stringify({ synced: false }));
+  const raw = await env.TRAINING_KV.get(NOTION_INDEX_KEY);
+  if (!raw) return corsResponse(JSON.stringify({ synced: false }));
+  try {
+    const { syncedAt, pages } = JSON.parse(raw);
+    return corsResponse(JSON.stringify({ synced: true, count: pages?.length ?? 0, syncedAt }));
+  } catch {
+    return corsResponse(JSON.stringify({ synced: false }));
+  }
+}
+
 /* ── /training ───────────────────────────────────────────── */
 
-const TRAINING_KEY = 'shared';
+const TRAINING_KEY  = 'shared';
+const NOTION_INDEX_KEY = 'notion-index';
 
 async function handleGetTraining(env) {
   const raw = await env.TRAINING_KV.get(TRAINING_KEY);
@@ -788,6 +976,14 @@ export default {
 
     if (pathname === '/fetch-source' && request.method === 'POST') {
       return handleFetchSource(request, env);
+    }
+
+    if (pathname === '/notion-sync-all' && request.method === 'POST') {
+      return handleNotionSyncAll(request, env);
+    }
+
+    if (pathname === '/notion-sync-status' && request.method === 'GET') {
+      return handleNotionSyncStatus(env);
     }
 
     return corsResponse(JSON.stringify({ error: 'Not found' }), 404);

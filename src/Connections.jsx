@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+
+const WORKER_URL = import.meta.env.VITE_WORKER_URL ?? ''
 
 function NotionIcon() {
   return (
@@ -78,6 +80,70 @@ function ConnectionCard({ name, icon, tokenPlaceholder, hint, connected, onConne
   )
 }
 
+function NotionSyncPanel({ notionToken }) {
+  const [status, setStatus]     = useState(null)   // { synced, count, syncedAt } | null
+  const [syncing, setSyncing]   = useState(false)
+  const [syncError, setSyncError] = useState('')
+
+  useEffect(() => {
+    fetch(`${WORKER_URL}/notion-sync-status`)
+      .then(r => r.json())
+      .then(d => setStatus(d))
+      .catch(() => {})
+  }, [notionToken])
+
+  async function handleSync() {
+    setSyncing(true); setSyncError('')
+    try {
+      const res = await fetch(`${WORKER_URL}/notion-sync-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notionToken }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Sync failed')
+      setStatus({ synced: true, count: data.count, syncedAt: data.syncedAt })
+    } catch (err) {
+      setSyncError(err.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  function formatSyncDate(iso) {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+      ' at ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  }
+
+  return (
+    <div className="notion-sync-panel">
+      <div className="notion-sync-info">
+        {status === null
+          ? 'Checking sync status…'
+          : status.synced
+            ? `${status.count} pages indexed · Last synced ${formatSyncDate(status.syncedAt)}`
+            : 'Workspace not yet indexed — queries fall back to live keyword search'}
+      </div>
+      <button
+        type="button"
+        className="src-btn-primary"
+        onClick={handleSync}
+        disabled={syncing}
+      >
+        {syncing ? 'Syncing…' : status?.synced ? 'Re-sync Workspace' : 'Sync Workspace'}
+      </button>
+      {syncError && <p className="source-form-error">{syncError}</p>}
+      {syncing && (
+        <p className="notion-sync-hint">
+          Reading all your Notion pages — this may take 15–30 seconds for large workspaces.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function Connections({ connections, onSave, onRemove }) {
   return (
     <div className="connections-section">
@@ -97,6 +163,10 @@ export default function Connections({ connections, onSave, onRemove }) {
         onConnect={token => onSave({ notionToken: token })}
         onDisconnect={() => onRemove('notionToken')}
       />
+
+      {connections.notionToken && (
+        <NotionSyncPanel notionToken={connections.notionToken} />
+      )}
 
       <ConnectionCard
         name="Intercom"
