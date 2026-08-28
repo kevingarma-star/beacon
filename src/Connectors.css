@@ -1,0 +1,290 @@
+/* ── Page wrapper ─────────────────────────────────────── */
+
+.connectors-page {
+  position: relative;
+  z-index: 2;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 40px 32px 60px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ── Header ───────────────────────────────────────────── */
+
+.connectors-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.connectors-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.connectors-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.5px;
+  margin: 0;
+}
+
+.connectors-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.55;
+}
+
+.connectors-count-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #27ae60;
+  background: rgba(39, 174, 96, 0.1);
+  border: 1px solid rgba(39, 174, 96, 0.25);
+  border-radius: 20px;
+  padding: 5px 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.connectors-count-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #27ae60;
+  flex-shrink: 0;
+}
+
+/* ── Grid ─────────────────────────────────────────────── */
+
+.connectors-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+
+  @media (max-width: 700px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Connector card ───────────────────────────────────── */
+
+.conn2-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 20px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.conn2-card:hover {
+  border-color: rgba(203, 238, 255, 0.18);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.conn2-card--connected {
+  border-color: rgba(39, 174, 96, 0.28);
+  background: rgba(39, 174, 96, 0.03);
+}
+
+.conn2-card--connected:hover {
+  border-color: rgba(39, 174, 96, 0.4);
+  background: rgba(39, 174, 96, 0.05);
+}
+
+.conn2-card--soon {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ── Card main row ────────────────────────────────────── */
+
+.conn2-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.conn2-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.conn2-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 1px;
+}
+
+.conn2-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.conn2-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.2px;
+}
+
+.conn2-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #27ae60;
+  background: rgba(39, 174, 96, 0.14);
+  border: 1px solid rgba(39, 174, 96, 0.28);
+  border-radius: 6px;
+  padding: 2px 7px;
+  line-height: 1.4;
+}
+
+.conn2-soon {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 7px;
+  line-height: 1.4;
+}
+
+.conn2-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* ── Card action buttons ──────────────────────────────── */
+
+.conn2-actions {
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.conn2-connect-btn {
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sky);
+  background: rgba(203, 238, 255, 0.07);
+  border: 1px solid rgba(203, 238, 255, 0.18);
+  border-radius: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+
+  &:hover {
+    background: rgba(203, 238, 255, 0.13);
+    border-color: rgba(203, 238, 255, 0.3);
+  }
+}
+
+.conn2-disconnect {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted-d);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px 0;
+  transition: color 0.15s;
+  white-space: nowrap;
+
+  &:hover {
+    color: var(--coral);
+  }
+}
+
+/* ── Connect form ─────────────────────────────────────── */
+
+.conn2-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.conn2-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.conn2-form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+
+  .train-input {
+    flex: 1;
+  }
+}
+
+.conn2-save-btn {
+  padding: 9px 16px !important;
+  white-space: nowrap;
+}
+
+/* ── Notion search section ────────────────────────────── */
+
+.connectors-search-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+
+.connectors-search-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+
+  span:first-child {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+  }
+}
+
+.connectors-search-sub {
+  font-size: 12px;
+  color: var(--muted-d);
+  line-height: 1.5;
+}
+
+.connectors-search-embed .notion-search-page {
+  padding: 0;
+  max-width: none;
+}

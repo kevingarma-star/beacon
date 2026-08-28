@@ -129,6 +129,7 @@ async function handleSuggest(request, env) {
     knowledgeContext,
     notionToken,
     intercomToken,
+    slackToken,
   } = body;
 
   if (!concern || typeof concern !== 'string' || !concern.trim()) {
@@ -141,13 +142,14 @@ async function handleSuggest(request, env) {
 
   // Search live workspaces and prepend results to any manual sources (all modes)
   let combinedContext = knowledgeContext || '';
-  if (notionToken || intercomToken) {
-    const [notionCtx, intercomCtx] = await Promise.all([
+  if (notionToken || intercomToken || slackToken) {
+    const [notionCtx, intercomCtx, slackCtx] = await Promise.all([
       notionToken   ? searchNotionContext(concern.trim(), notionToken)     : Promise.resolve(''),
       intercomToken ? fetchIntercomContext(concern.trim(), intercomToken)  : Promise.resolve(''),
+      slackToken    ? searchSlackContext(concern.trim(), slackToken)       : Promise.resolve(''),
     ]);
 
-    const liveCtx = [notionCtx, intercomCtx].filter(Boolean).join('\n\n---\n\n');
+    const liveCtx = [notionCtx, intercomCtx, slackCtx].filter(Boolean).join('\n\n---\n\n');
     combinedContext = liveCtx
       ? liveCtx + (combinedContext ? '\n\n---\n\n' + combinedContext : '')
       : combinedContext;
@@ -204,7 +206,7 @@ async function handleChat(request, env) {
 
   const {
     messages = [], tones = ['professional'], agentName, instructions, traits,
-    knowledgeContext, notionToken, intercomToken,
+    knowledgeContext, notionToken, intercomToken, slackToken,
   } = body;
 
   if (!messages.length || messages[messages.length - 1].role !== 'user') {
@@ -217,13 +219,14 @@ async function handleChat(request, env) {
 
   // Search live workspaces based on the latest user message
   let combinedContext = knowledgeContext || '';
-  if (notionToken || intercomToken) {
+  if (notionToken || intercomToken || slackToken) {
     const latestQuery = messages[messages.length - 1].content;
-    const [notionCtx, intercomCtx] = await Promise.all([
+    const [notionCtx, intercomCtx, slackCtx] = await Promise.all([
       notionToken   ? searchNotionContext(latestQuery, notionToken)    : Promise.resolve(''),
       intercomToken ? fetchIntercomContext(latestQuery, intercomToken) : Promise.resolve(''),
+      slackToken    ? searchSlackContext(latestQuery, slackToken)      : Promise.resolve(''),
     ]);
-    const liveCtx = [notionCtx, intercomCtx].filter(Boolean).join('\n\n---\n\n');
+    const liveCtx = [notionCtx, intercomCtx, slackCtx].filter(Boolean).join('\n\n---\n\n');
     combinedContext = liveCtx
       ? liveCtx + (combinedContext ? '\n\n---\n\n' + combinedContext : '')
       : combinedContext;
@@ -425,6 +428,33 @@ async function fetchIntercomContext(query, token) {
     .slice(0, 8)
     .map(a => `### ${a.title}\n${stripHtml(a.body || '').slice(0, 4000)}`)
     .join('\n\n---\n\n');
+}
+
+async function searchSlackContext(query, token) {
+  try {
+    const url = `https://slack.com/api/search.messages?query=${encodeURIComponent(query)}&count=6&highlight=false`;
+    const res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) return '';
+    const data = await res.json();
+    if (!data.ok) return '';
+
+    const matches = data.messages?.matches ?? [];
+    if (!matches.length) return '';
+
+    const snippets = matches.map(m => {
+      const channel = m.channel?.name ? `#${m.channel.name}` : 'Slack';
+      const user    = m.username || m.user || 'Unknown';
+      // Strip Slack mrkdwn tags and angle-bracket refs
+      const text    = (m.text || '').replace(/<[^>]+>/g, '').replace(/\*/g, '').trim();
+      return `[Slack / ${channel} — ${user}]\n${text}`;
+    });
+
+    return `## Slack Messages\n${snippets.join('\n\n')}`;
+  } catch {
+    return '';
+  }
 }
 
 /* ── /notion-search ─────────────────────────────────────── */

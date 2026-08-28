@@ -9,6 +9,7 @@ import { useTraining }     from './useTraining'
 import { useSources }      from './useSources'
 import { useConnections }  from './useConnections'
 import NotionSearch        from './NotionSearch'
+import Connectors          from './Connectors'
 
 const TONES = [
   { id: 'professional', label: 'Professional', desc: 'Formal and polished' },
@@ -83,6 +84,7 @@ export default function App() {
           knowledgeContext: sources.knowledgeContext   || undefined,
           notionToken:      connections.notionToken    || undefined,
           intercomToken:    connections.intercomToken  || undefined,
+          slackToken:       connections.slackToken     || undefined,
         }),
       })
       const data = await res.json()
@@ -128,6 +130,7 @@ export default function App() {
           knowledgeContext: sources.knowledgeContext   || undefined,
           notionToken:      connections.notionToken    || undefined,
           intercomToken:    connections.intercomToken  || undefined,
+          slackToken:       connections.slackToken     || undefined,
         }),
       })
       const data = await res.json()
@@ -186,6 +189,17 @@ export default function App() {
             >
               Search
             </button>
+            <button
+              className={`nav-tab${view === 'connect' ? ' nav-tab--active' : ''}`}
+              onClick={() => setView('connect')}
+            >
+              Connect
+              {(connections.notionToken || connections.intercomToken || connections.slackToken) && (
+                <span className="nav-badge">
+                  {[connections.notionToken, connections.intercomToken, connections.slackToken].filter(Boolean).length}
+                </span>
+              )}
+            </button>
           </nav>
         </div>
       </header>
@@ -209,15 +223,21 @@ export default function App() {
           updateSource={sources.updateSource}
           activeCount={sources.activeCount}
           totalChars={sources.totalChars}
-          connections={connections}
-          onSaveConnection={saveConnection}
-          onRemoveConnection={removeConnection}
         />
       )}
 
       {view === 'search' && (
         <NotionSearch
           connections={connections}
+          addSource={sources.addSource}
+        />
+      )}
+
+      {view === 'connect' && (
+        <Connectors
+          connections={connections}
+          onSave={saveConnection}
+          onRemove={removeConnection}
           addSource={sources.addSource}
         />
       )}
@@ -316,7 +336,7 @@ export default function App() {
               />
             )}
 
-            {((!isAsk && training.data.examples.length > 0) || sources.activeCount > 0 || connections.notionToken || connections.intercomToken) && (
+            {((!isAsk && training.data.examples.length > 0) || sources.activeCount > 0 || connections.notionToken || connections.intercomToken || connections.slackToken) && (
               <div className="context-badges">
                 {!isAsk && training.data.examples.length > 0 && (
                   <div className="training-active-badge">
@@ -340,6 +360,12 @@ export default function App() {
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     Intercom articles
+                  </div>
+                )}
+                {connections.slackToken && (
+                  <div className="training-active-badge">
+                    <span className="training-dot" />
+                    Slack messages
                   </div>
                 )}
               </div>
