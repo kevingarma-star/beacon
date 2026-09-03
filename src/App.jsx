@@ -2,7 +2,6 @@ import { useState } from 'react'
 import './App.css'
 import coverageMap from './assets/hubble-coverage-map.png'
 import Training from './Training'
-import Sources  from './Sources'
 import Chat             from './Chat'
 import QuickTraining    from './QuickTraining'
 import { useTraining }     from './useTraining'
@@ -175,15 +174,6 @@ export default function App() {
               )}
             </button>
             <button
-              className={`nav-tab${view === 'sources' ? ' nav-tab--active' : ''}`}
-              onClick={() => setView('sources')}
-            >
-              Sources
-              {sources.activeCount > 0 && (
-                <span className="nav-badge">{sources.activeCount}</span>
-              )}
-            </button>
-            <button
               className={`nav-tab${view === 'search' ? ' nav-tab--active' : ''}`}
               onClick={() => setView('search')}
             >
@@ -211,18 +201,6 @@ export default function App() {
           addExample={training.addExample}
           removeExample={training.removeExample}
           score={training.score}
-        />
-      )}
-
-      {view === 'sources' && (
-        <Sources
-          sources={sources.sources}
-          addSource={sources.addSource}
-          removeSource={sources.removeSource}
-          toggleSource={sources.toggleSource}
-          updateSource={sources.updateSource}
-          activeCount={sources.activeCount}
-          totalChars={sources.totalChars}
         />
       )}
 
@@ -336,18 +314,12 @@ export default function App() {
               />
             )}
 
-            {((!isAsk && training.data.examples.length > 0) || sources.activeCount > 0 || connections.notionToken || connections.intercomToken || connections.slackToken) && (
+            {((!isAsk && training.data.examples.length > 0) || connections.notionToken || connections.intercomToken || connections.slackToken) && (
               <div className="context-badges">
                 {!isAsk && training.data.examples.length > 0 && (
                   <div className="training-active-badge">
                     <span className="training-dot" />
                     {training.data.examples.length} training example{training.data.examples.length !== 1 ? 's' : ''}
-                  </div>
-                )}
-                {sources.activeCount > 0 && (
-                  <div className="training-active-badge">
-                    <span className="training-dot" />
-                    {sources.activeCount} knowledge source{sources.activeCount !== 1 ? 's' : ''}
                   </div>
                 )}
                 {connections.notionToken && (
