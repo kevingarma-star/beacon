@@ -640,6 +640,19 @@ function blockToLine(block, depth) {
     case 'quote':               return `> ${richText(content.rich_text)}`;
     case 'code':                return `\`\`\`\n${richText(content.rich_text)}\n\`\`\``;
     case 'table_row':           return (content.cells || []).map(c => richText(c)).join(' | ');
+    case 'child_page':          return `## ${content.title || 'Subpage'}`;
+    case 'child_database':      return `## Database: ${content.title || 'Untitled'}`;
+    case 'bookmark': {
+      const caption = richText(content.caption);
+      return content.url ? `[Bookmark] ${caption || content.url}${caption ? ' — ' + content.url : ''}` : '';
+    }
+    case 'embed':               return content.url ? `[Embed] ${content.url}` : '';
+    case 'image':               return richText(content.caption) || '';
+    case 'divider':             return '---';
+    // column_list / column / synced_block have no own text — content comes via has_children recursion
+    case 'column_list':
+    case 'column':
+    case 'synced_block':        return '';
     default:                    return richText(content.rich_text);
   }
 }
@@ -662,6 +675,27 @@ async function extractNotionContent(blockId, headers, depth = 0, blockCount = { 
 
     for (const block of (data.results || [])) {
       if (blockCount.n++ >= MAX_BLOCKS) break;
+
+      // Follow link_to_page references — fetch the linked page and inline its content
+      if (block.type === 'link_to_page' && block.link_to_page?.page_id && depth < MAX_DEPTH) {
+        try {
+          const linkedId = block.link_to_page.page_id;
+          const [pageRes, linkedContent] = await Promise.all([
+            fetch(`https://api.notion.com/v1/pages/${linkedId}`, { headers }).then(r => r.ok ? r.json() : null),
+            extractNotionContent(linkedId, headers, depth + 1, blockCount),
+          ]);
+          if (pageRes) {
+            const title = extractNotionTitle(pageRes);
+            const props = extractNotionProperties(pageRes);
+            const body  = [props, linkedContent].filter(Boolean).join('\n\n');
+            lines.push(`### → ${title}${body.trim() ? '\n' + body.slice(0, 3000) : ''}`);
+          }
+        } catch {
+          // skip failed link follows
+        }
+        continue;
+      }
+
       const line = blockToLine(block, depth);
       if (line.trim()) lines.push(line);
 
