@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
 import coverageMap from './assets/hubble-coverage-map.png'
 import Training from './Training'
@@ -39,6 +39,20 @@ export default function App() {
   const training     = useTraining()
   const sources      = useSources()
   const { connections, saveConnection, removeConnection } = useConnections()
+
+  // Handle Notion OAuth callback — token arrives in the URL hash
+  useEffect(() => {
+    const hash = new URLSearchParams(window.location.hash.slice(1))
+    const token = hash.get('notion_token')
+    const error = hash.get('notion_error')
+    if (token) {
+      saveConnection({ notionToken: token })
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    } else if (error) {
+      console.error('Notion OAuth error:', decodeURIComponent(error))
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function switchMode(m) {
     setMode(m)

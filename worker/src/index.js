@@ -306,7 +306,6 @@ async function searchNotionContext(query, token) {
       body: JSON.stringify({
         query,
         filter: { value: 'page', property: 'object' },
-        sort: { direction: 'descending', timestamp: 'relevance' },
         page_size: 6,
       }),
     }).then(r => r.ok ? r.json() : null),
@@ -324,30 +323,40 @@ async function searchNotionContext(query, token) {
   const pageResults  = pageResult.status  === 'fulfilled' && pageResult.value  ? pageResult.value.results  || [] : [];
   const databases    = dbResult.status    === 'fulfilled' && dbResult.value    ? (dbResult.value.results   || []).slice(0, 5) : [];
 
-  // Database fallback: query each accessible DB for pages whose title matches the query
+  // Database fallback: query each accessible DB for relevant rows.
+  // Primary: rows whose title keyword-matches the query.
+  // Fallback: if no title match, include the 2 most recently edited rows so structured
+  // databases (e.g. tracker tables) still surface their content even when row titles
+  // don't contain the query terms.
   const existingIds = new Set(pageResults.map(p => p.id));
   const words       = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
   let dbPages = [];
 
-  if (databases.length > 0 && words.length > 0) {
+  if (databases.length > 0) {
     const buckets = await Promise.all(databases.map(async db => {
       try {
         const r = await fetch(`https://api.notion.com/v1/databases/${db.id}/query`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ page_size: 20 }),
+          body: JSON.stringify({
+            page_size: 20,
+            sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }],
+          }),
         });
         if (!r.ok) return [];
         const { results = [] } = await r.json();
-        return results
+        const scored = results
+          .filter(p => !existingIds.has(p.id))
           .map(p => {
             const title = extractNotionTitle(p).toLowerCase();
             const score = words.reduce((n, w) => n + (title.includes(w) ? 1 : 0), 0);
             return { ...p, _score: score };
-          })
-          .filter(p => p._score > 0 && !existingIds.has(p.id))
-          .sort((a, b) => b._score - a._score)
-          .slice(0, 2);
+          });
+
+        const matched = scored.filter(p => p._score > 0).sort((a, b) => b._score - a._score).slice(0, 2);
+        // No title match? Fall back to 2 most recently edited rows so structured
+        // databases (tracker logs, etc.) still contribute their row content.
+        return matched.length > 0 ? matched : scored.slice(0, 2);
       } catch {
         return [];
       }
@@ -358,12 +367,11 @@ async function searchNotionContext(query, token) {
   // Merge: page search first, then DB matches that weren't already found; cap at 6 total
   const pages    = [...pageResults, ...dbPages].slice(0, 6);
   const sections = [];
-
   for (const page of pages) {
     try {
       const title  = extractNotionTitle(page);
       const props  = extractNotionProperties(page);          // database column values
-      const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 });
+      const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 }, new Set([page.id]));
       const body   = [props, blocks].filter(Boolean).join('\n\n');
       if (body.trim()) {
         sections.push(`### ${title}\n${body.slice(0, 6000)}`);
@@ -431,25 +439,82 @@ async function fetchIntercomContext(query, token) {
 }
 
 async function searchSlackContext(query, token) {
+  const headers = { 'Authorization': `Bearer ${token}` };
+
+  // Try search.messages first — only works with user tokens (xoxp-*) + search:read scope.
+  // Bot tokens (xoxb-*) will get ok:false here, so we fall through to the history fallback.
   try {
-    const url = `https://slack.com/api/search.messages?query=${encodeURIComponent(query)}&count=6&highlight=false`;
-    const res = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    if (!res.ok) return '';
-    const data = await res.json();
-    if (!data.ok) return '';
+    const res = await fetch(
+      `https://slack.com/api/search.messages?query=${encodeURIComponent(query)}&count=6&highlight=false`,
+      { headers }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok) {
+        const matches = data.messages?.matches ?? [];
+        if (matches.length) {
+          const snippets = matches.map(m => {
+            const channel = m.channel?.name ? `#${m.channel.name}` : 'Slack';
+            const user    = m.username || m.user || 'Unknown';
+            const text    = (m.text || '').replace(/<[^>]+>/g, '').replace(/\*/g, '').trim();
+            return `[Slack / ${channel} — ${user}]\n${text}`;
+          });
+          return `## Slack Messages\n${snippets.join('\n\n')}`;
+        }
+        // search.messages worked but found nothing for this query — stop here.
+        return '';
+      }
+      // data.ok === false means bot token or missing search:read — fall through to history scan.
+    }
+  } catch {
+    // network error — fall through
+  }
 
-    const matches = data.messages?.matches ?? [];
-    if (!matches.length) return '';
+  // Fallback: scan conversations.history from channels the bot is a member of.
+  // Requires bot scopes: channels:read, channels:history (+ groups:read/history for private).
+  try {
+    const listRes = await fetch(
+      'https://slack.com/api/conversations.list?types=public_channel,private_channel&exclude_archived=true&limit=50',
+      { headers }
+    );
+    if (!listRes.ok) return '';
+    const listData = await listRes.json();
+    if (!listData.ok) return '';
 
-    const snippets = matches.map(m => {
-      const channel = m.channel?.name ? `#${m.channel.name}` : 'Slack';
-      const user    = m.username || m.user || 'Unknown';
-      // Strip Slack mrkdwn tags and angle-bracket refs
-      const text    = (m.text || '').replace(/<[^>]+>/g, '').replace(/\*/g, '').trim();
-      return `[Slack / ${channel} — ${user}]\n${text}`;
-    });
+    const channels = (listData.channels || []).filter(c => c.is_member).slice(0, 10);
+    if (!channels.length) return '';
+
+    const words   = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const matched = [];
+
+    await Promise.all(channels.map(async ch => {
+      try {
+        const histRes = await fetch(
+          `https://slack.com/api/conversations.history?channel=${ch.id}&limit=100`,
+          { headers }
+        );
+        if (!histRes.ok) return;
+        const histData = await histRes.json();
+        if (!histData.ok) return;
+
+        for (const msg of (histData.messages || [])) {
+          if (!msg.text || msg.subtype) continue;
+          const text  = msg.text.replace(/<[^>]+>/g, '').replace(/\*/g, '').trim();
+          const lower = text.toLowerCase();
+          const score = words.reduce((n, w) => n + (lower.includes(w) ? 1 : 0), 0);
+          if (score > 0) matched.push({ score, channel: ch.name, user: msg.user || 'Unknown', text });
+        }
+      } catch {
+        // skip channels that fail
+      }
+    }));
+
+    if (!matched.length) return '';
+
+    const snippets = matched
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6)
+      .map(m => `[Slack / #${m.channel} — ${m.user}]\n${m.text}`);
 
     return `## Slack Messages\n${snippets.join('\n\n')}`;
   } catch {
@@ -622,6 +687,15 @@ function richText(arr) {
   return (arr || []).map(t => t.plain_text).join('');
 }
 
+// Returns Notion page IDs mentioned inline (@mentions) in a block's rich_text.
+function extractInlineMentionIds(block) {
+  const content = block[block.type];
+  if (!content) return [];
+  return (content.rich_text || [])
+    .filter(t => t.type === 'mention' && t.mention?.type === 'page' && t.mention.page?.id)
+    .map(t => t.mention.page.id);
+}
+
 function blockToLine(block, depth) {
   const type    = block.type;
   const content = block[type];
@@ -647,7 +721,32 @@ function blockToLine(block, depth) {
       return content.url ? `[Bookmark] ${caption || content.url}${caption ? ' — ' + content.url : ''}` : '';
     }
     case 'embed':               return content.url ? `[Embed] ${content.url}` : '';
-    case 'image':               return richText(content.caption) || '';
+    case 'image': {
+      const cap = richText(content.caption);
+      const url = content.type === 'external' ? content.external?.url : null;
+      return [cap, url].filter(Boolean).join(' — ') || '';
+    }
+    case 'file': {
+      const name = content.name || 'File';
+      const cap  = richText(content.caption);
+      const url  = content.type === 'external' ? content.external?.url : null;
+      return `[File: ${name}]${url ? ' ' + url : ''}${cap ? ' — ' + cap : ''}`;
+    }
+    case 'pdf': {
+      const name = content.name || 'PDF';
+      const url  = content.type === 'external' ? content.external?.url : null;
+      return `[PDF: ${name}]${url ? ' ' + url : ''}`;
+    }
+    case 'video': {
+      const url = content.type === 'external' ? content.external?.url : null;
+      const cap = richText(content.caption);
+      return url ? `[Video${cap ? ': ' + cap : ''}] ${url}` : (cap ? `[Video: ${cap}]` : '');
+    }
+    case 'audio': {
+      const url = content.type === 'external' ? content.external?.url : null;
+      const cap = richText(content.caption);
+      return url ? `[Audio${cap ? ': ' + cap : ''}] ${url}` : (cap ? `[Audio: ${cap}]` : '');
+    }
     case 'divider':             return '---';
     // column_list / column / synced_block have no own text — content comes via has_children recursion
     case 'column_list':
@@ -659,13 +758,16 @@ function blockToLine(block, depth) {
 
 // Fetches ALL blocks for a given blockId — paginates until done, recurses into children.
 // depth + blockCount guard against runaway pages.
-async function extractNotionContent(blockId, headers, depth = 0, blockCount = { n: 0 }) {
+async function extractNotionContent(blockId, headers, depth = 0, blockCount = { n: 0 }, visitedIds = new Set()) {
   const MAX_DEPTH  = 5;
   const MAX_BLOCKS = 500;
   if (depth > MAX_DEPTH || blockCount.n >= MAX_BLOCKS) return '';
+  if (visitedIds.has(blockId)) return ''; // prevent cycles
+  visitedIds.add(blockId);
 
-  const lines  = [];
-  let   cursor = undefined;
+  const lines      = [];
+  const mentionIds = new Set(); // inline @page mentions to follow after pagination
+  let   cursor     = undefined;
 
   do {
     const url = `https://api.notion.com/v1/blocks/${blockId}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ''}`;
@@ -676,22 +778,70 @@ async function extractNotionContent(blockId, headers, depth = 0, blockCount = { 
     for (const block of (data.results || [])) {
       if (blockCount.n++ >= MAX_BLOCKS) break;
 
-      // Follow link_to_page references — fetch the linked page and inline its content
-      if (block.type === 'link_to_page' && block.link_to_page?.page_id && depth < MAX_DEPTH) {
+      // Follow link_to_page references — fetch the linked page or database and inline its content
+      if (block.type === 'link_to_page' && depth < MAX_DEPTH) {
+        if (block.link_to_page?.page_id) {
+          try {
+            const linkedId = block.link_to_page.page_id;
+            const [pageRes, linkedContent] = await Promise.all([
+              fetch(`https://api.notion.com/v1/pages/${linkedId}`, { headers }).then(r => r.ok ? r.json() : null),
+              extractNotionContent(linkedId, headers, depth + 1, blockCount, visitedIds),
+            ]);
+            if (pageRes) {
+              const title = extractNotionTitle(pageRes);
+              const props = extractNotionProperties(pageRes);
+              const body  = [props, linkedContent].filter(Boolean).join('\n\n');
+              lines.push(`### → ${title}${body.trim() ? '\n' + body.slice(0, 3000) : ''}`);
+            }
+          } catch {
+            // skip failed link follows
+          }
+        } else if (block.link_to_page?.database_id) {
+          try {
+            const dbId  = block.link_to_page.database_id;
+            const dbRes = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ page_size: 10, sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }] }),
+            });
+            if (dbRes.ok) {
+              const { results = [] } = await dbRes.json();
+              const rows = results.map(row => {
+                const t = extractNotionTitle(row);
+                const p = extractNotionProperties(row);
+                return [t ? `**${t}**` : null, p].filter(Boolean).join('\n');
+              }).filter(Boolean);
+              if (rows.length) lines.push(`### → Linked Database\n${rows.join('\n\n').slice(0, 2000)}`);
+            }
+          } catch {
+            // skip failed database link follows
+          }
+        }
+        continue;
+      }
+
+      // child_database blocks — query the inline database and include its rows
+      if (block.type === 'child_database' && depth < MAX_DEPTH) {
+        const dbTitle = block.child_database?.title || 'Table';
+        lines.push(`## ${dbTitle}`);
         try {
-          const linkedId = block.link_to_page.page_id;
-          const [pageRes, linkedContent] = await Promise.all([
-            fetch(`https://api.notion.com/v1/pages/${linkedId}`, { headers }).then(r => r.ok ? r.json() : null),
-            extractNotionContent(linkedId, headers, depth + 1, blockCount),
-          ]);
-          if (pageRes) {
-            const title = extractNotionTitle(pageRes);
-            const props = extractNotionProperties(pageRes);
-            const body  = [props, linkedContent].filter(Boolean).join('\n\n');
-            lines.push(`### → ${title}${body.trim() ? '\n' + body.slice(0, 3000) : ''}`);
+          const dbRes = await fetch(`https://api.notion.com/v1/databases/${block.id}/query`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ page_size: 20, sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }] }),
+          });
+          if (dbRes.ok) {
+            const { results = [] } = await dbRes.json();
+            for (const row of results.slice(0, 15)) {
+              if (blockCount.n++ >= MAX_BLOCKS) break;
+              const rowTitle = extractNotionTitle(row);
+              const rowProps = extractNotionProperties(row);
+              const rowLine  = [rowTitle ? `**${rowTitle}**` : null, rowProps].filter(Boolean).join('\n');
+              if (rowLine.trim()) lines.push(rowLine);
+            }
           }
         } catch {
-          // skip failed link follows
+          // skip failed inline database queries
         }
         continue;
       }
@@ -699,14 +849,40 @@ async function extractNotionContent(blockId, headers, depth = 0, blockCount = { 
       const line = blockToLine(block, depth);
       if (line.trim()) lines.push(line);
 
+      // Collect inline @page mentions for deferred following
+      for (const id of extractInlineMentionIds(block)) {
+        if (!visitedIds.has(id)) mentionIds.add(id);
+      }
+
       if (block.has_children) {
-        const child = await extractNotionContent(block.id, headers, depth + 1, blockCount);
+        const child = await extractNotionContent(block.id, headers, depth + 1, blockCount, visitedIds);
         if (child) lines.push(child);
       }
     }
 
     cursor = data.has_more ? data.next_cursor : undefined;
   } while (cursor);
+
+  // Follow inline @page mentions — cap at 3 per page to avoid blowup
+  if (depth < MAX_DEPTH) {
+    for (const mentionId of [...mentionIds].slice(0, 3)) {
+      if (visitedIds.has(mentionId)) continue;
+      try {
+        const [pageRes, linkedContent] = await Promise.all([
+          fetch(`https://api.notion.com/v1/pages/${mentionId}`, { headers }).then(r => r.ok ? r.json() : null),
+          extractNotionContent(mentionId, headers, depth + 1, blockCount, visitedIds),
+        ]);
+        if (pageRes) {
+          const title = extractNotionTitle(pageRes);
+          const props = extractNotionProperties(pageRes);
+          const body  = [props, linkedContent].filter(Boolean).join('\n\n');
+          if (body.trim()) lines.push(`### → ${title} (mentioned)\n${body.slice(0, 2000)}`);
+        }
+      } catch {
+        // skip failed mention follows
+      }
+    }
+  }
 
   return lines.join('\n');
 }
@@ -782,7 +958,7 @@ async function handleFetchSource(request, env) {
       const pageData = await pageRes.json();
       const title    = extractNotionTitle(pageData);
       const props    = extractNotionProperties(pageData);    // database column values
-      const blocks   = await extractNotionContent(pageId, headers);
+      const blocks   = await extractNotionContent(pageId, headers, 0, { n: 0 }, new Set([pageId]));
       const content  = [props, blocks].filter(Boolean).join('\n\n');
 
       return corsResponse(JSON.stringify({ title, content: content.slice(0, 30000) }));
@@ -814,6 +990,85 @@ async function handlePutTraining(request, env) {
   }
   await env.TRAINING_KV.put(TRAINING_KEY, body);
   return corsResponse(JSON.stringify({ ok: true }));
+}
+
+/* ── Notion OAuth ────────────────────────────────────────── */
+
+const NOTION_REDIRECT_URI = 'https://beacon-worker.kevin-garma.workers.dev/notion-callback';
+
+async function handleNotionAuth(request, env) {
+  if (!env.NOTION_CLIENT_ID) {
+    return corsResponse(JSON.stringify({ error: 'Notion OAuth is not configured on this server.' }), 500);
+  }
+
+  let body = {};
+  try { body = await request.json(); } catch { /* no body is fine */ }
+
+  const redirectOrigin = body.redirect_origin || 'https://kevingarma-star.github.io';
+
+  // Store state → redirectOrigin in KV with 5-minute TTL
+  const state = crypto.randomUUID();
+  await env.TRAINING_KV.put(`oauth_state_${state}`, redirectOrigin, { expirationTtl: 300 });
+
+  const authUrl = new URL('https://api.notion.com/v1/oauth/authorize');
+  authUrl.searchParams.set('client_id', env.NOTION_CLIENT_ID);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('owner', 'user');
+  authUrl.searchParams.set('redirect_uri', NOTION_REDIRECT_URI);
+  authUrl.searchParams.set('state', state);
+
+  return corsResponse(JSON.stringify({ url: authUrl.toString() }));
+}
+
+async function handleNotionCallback(request, env) {
+  const url          = new URL(request.url);
+  const code         = url.searchParams.get('code');
+  const state        = url.searchParams.get('state');
+  const errorParam   = url.searchParams.get('error');
+
+  // Look up redirect origin from KV
+  const redirectOrigin = state ? await env.TRAINING_KV.get(`oauth_state_${state}`) : null;
+  const appBase        = (redirectOrigin || 'https://kevingarma-star.github.io') + '/beacon/';
+
+  if (errorParam || !code) {
+    return Response.redirect(`${appBase}#notion_error=${encodeURIComponent(errorParam || 'no_code')}`, 302);
+  }
+  if (!redirectOrigin) {
+    return Response.redirect(`${appBase}#notion_error=invalid_state`, 302);
+  }
+
+  // Clean up state
+  await env.TRAINING_KV.delete(`oauth_state_${state}`);
+
+  // Exchange code for access token
+  try {
+    const tokenRes = await fetch('https://api.notion.com/v1/oauth/token', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${btoa(`${env.NOTION_CLIENT_ID}:${env.NOTION_CLIENT_SECRET}`)}`,
+        'Content-Type': 'application/json',
+        'Notion-Version': '2022-06-28',
+      },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: NOTION_REDIRECT_URI,
+      }),
+    });
+
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.access_token) {
+      const msg = tokenData.error_description || tokenData.error || 'token_exchange_failed';
+      return Response.redirect(`${appBase}#notion_error=${encodeURIComponent(msg)}`, 302);
+    }
+
+    return Response.redirect(
+      `${appBase}#notion_token=${encodeURIComponent(tokenData.access_token)}`,
+      302
+    );
+  } catch (err) {
+    return Response.redirect(`${appBase}#notion_error=${encodeURIComponent(err.message)}`, 302);
+  }
 }
 
 /* ── Router ──────────────────────────────────────────────── */
@@ -852,6 +1107,15 @@ export default {
 
     if (pathname === '/fetch-source' && request.method === 'POST') {
       return handleFetchSource(request, env);
+    }
+
+    if (pathname === '/notion-auth' && request.method === 'POST') {
+      return handleNotionAuth(request, env);
+    }
+
+    // GET — Notion redirects here after user approves; returns a browser redirect, no CORS needed
+    if (pathname === '/notion-callback' && request.method === 'GET') {
+      return handleNotionCallback(request, env);
     }
 
     return corsResponse(JSON.stringify({ error: 'Not found' }), 404);
