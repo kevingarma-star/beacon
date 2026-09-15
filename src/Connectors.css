@@ -186,6 +186,28 @@
   padding-top: 2px;
 }
 
+.conn2-oauth-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.conn2-token-toggle {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.35);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+
+  &:hover { color: rgba(255,255,255,0.6); }
+}
+
 .conn2-connect-btn {
   font-family: var(--sans);
   font-size: 12.5px;

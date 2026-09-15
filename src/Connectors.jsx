@@ -63,8 +63,9 @@ const CONNECTORS = [
     name: 'Notion',
     description: 'Searches your entire Notion workspace — pages, docs, and databases are queried live on every generation.',
     tokenKey: 'notionToken',
+    oauth: true,
     placeholder: 'secret_xxxx… or ntn_xxxx…',
-    hint: 'Create an integration at notion.so/my-integrations, then open the pages you want searchable and share them with that integration via the ··· menu → Connections.',
+    hint: 'Tip: share one top-level page with your integration and all pages beneath it become searchable automatically.',
     iconColor: '#fff',
     accentColor: 'rgba(255,255,255,0.1)',
     icon: NotionIcon,
@@ -126,8 +127,9 @@ const CONNECTORS = [
 /* ── Connector card ──────────────────────────────────────── */
 
 function ConnectorCard({ def, connected, onConnect, onDisconnect }) {
-  const [expanded, setExpanded] = useState(false)
-  const [draft, setDraft]       = useState('')
+  const [expanded, setExpanded]   = useState(false)
+  const [draft, setDraft]         = useState('')
+  const [oauthBusy, setOauthBusy] = useState(false)
 
   const isSoon = def.status === 'soon'
 
@@ -142,6 +144,24 @@ function ConnectorCard({ def, connected, onConnect, onDisconnect }) {
   function handleDisconnect() {
     onDisconnect()
     setExpanded(false)
+  }
+
+  async function handleOAuth() {
+    setOauthBusy(true)
+    try {
+      const workerUrl = import.meta.env.VITE_WORKER_URL ?? ''
+      const res = await fetch(`${workerUrl}/notion-auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ redirect_origin: window.location.origin }),
+      })
+      const { url, error } = await res.json()
+      if (error) throw new Error(error)
+      window.location.href = url
+    } catch (err) {
+      alert(`Could not start Notion authorization: ${err.message}`)
+      setOauthBusy(false)
+    }
   }
 
   return (
@@ -164,6 +184,24 @@ function ConnectorCard({ def, connected, onConnect, onDisconnect }) {
               <button type="button" className="conn2-disconnect" onClick={handleDisconnect}>
                 Disconnect
               </button>
+            ) : def.oauth ? (
+              <div className="conn2-oauth-actions">
+                <button
+                  type="button"
+                  className="conn2-connect-btn"
+                  onClick={handleOAuth}
+                  disabled={oauthBusy}
+                >
+                  {oauthBusy ? 'Redirecting…' : 'Connect with Notion'}
+                </button>
+                <button
+                  type="button"
+                  className="conn2-token-toggle"
+                  onClick={() => setExpanded(v => !v)}
+                >
+                  {expanded ? 'Cancel' : 'Use API token'}
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
