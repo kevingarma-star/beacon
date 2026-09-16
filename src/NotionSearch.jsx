@@ -179,7 +179,7 @@ export default function NotionSearch({ connections, addSource }) {
           <span className="ns-empty-icon"><NotionIcon /></span>
           <p className="ns-empty-title">Notion not connected</p>
           <p className="ns-empty-sub">
-            Go to <strong>Sources → Workspace Connections</strong> and add your Notion integration token to enable search.
+            Go to the <strong>Connect</strong> tab and connect Notion to enable search.
           </p>
         </div>
       </div>

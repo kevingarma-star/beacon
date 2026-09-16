@@ -1,6 +1,6 @@
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
@@ -144,7 +144,7 @@ async function handleSuggest(request, env) {
   let combinedContext = knowledgeContext || '';
   if (notionToken || intercomToken || slackToken) {
     const [notionCtx, intercomCtx, slackCtx] = await Promise.all([
-      notionToken   ? searchNotionContext(concern.trim(), notionToken)     : Promise.resolve(''),
+      notionToken   ? searchNotionContext(concern.trim(), notionToken, env)   : Promise.resolve(''),
       intercomToken ? fetchIntercomContext(concern.trim(), intercomToken)  : Promise.resolve(''),
       slackToken    ? searchSlackContext(concern.trim(), slackToken)       : Promise.resolve(''),
     ]);
@@ -222,7 +222,7 @@ async function handleChat(request, env) {
   if (notionToken || intercomToken || slackToken) {
     const latestQuery = messages[messages.length - 1].content;
     const [notionCtx, intercomCtx, slackCtx] = await Promise.all([
-      notionToken   ? searchNotionContext(latestQuery, notionToken)    : Promise.resolve(''),
+      notionToken   ? searchNotionContext(latestQuery, notionToken, env)   : Promise.resolve(''),
       intercomToken ? fetchIntercomContext(latestQuery, intercomToken) : Promise.resolve(''),
       slackToken    ? searchSlackContext(latestQuery, slackToken)      : Promise.resolve(''),
     ]);
@@ -291,12 +291,55 @@ async function handleChat(request, env) {
 
 /* ── Live workspace search helpers ──────────────────────── */
 
-async function searchNotionContext(query, token) {
-  const headers = {
+function notionHeaders(token) {
+  return {
     'Authorization': `Bearer ${token}`,
     'Notion-Version': '2022-06-28',
     'Content-Type': 'application/json',
   };
+}
+
+// Fetches full content for a list of pages and formats them as context sections.
+async function buildNotionSections(pages, headers, maxChars = 6000) {
+  // Sequential on purpose: Notion rate-limits at ~3 req/s and each page can recurse.
+  const sections = [];
+  for (const page of pages) {
+    try {
+      const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 }, new Set());
+      const body   = [page.props, blocks].filter(Boolean).join('\n\n');
+      if (body.trim()) sections.push(`### ${page.title}\n${body.slice(0, maxChars)}`);
+    } catch {
+      // skip pages that fail
+    }
+  }
+  return sections;
+}
+
+// Grounding context for /suggest and /chat.
+// 1. If the workspace has been synced, rank EVERY indexed page locally and pull full
+//    content for the best matches (catches pages Notion's title-weighted search misses).
+// 2. If the index is missing or thin for this query, top up with live Notion search.
+async function searchNotionContext(query, token, env) {
+  const headers = notionHeaders(token);
+  const MAX_PAGES = 5;
+  let sections = [];
+  const seen = new Set();
+
+  const index = await loadNotionIndex(env, token);
+  if (index) {
+    const hits = rankNotionIndex(index.pages, query).slice(0, MAX_PAGES - 1);
+    hits.forEach(h => seen.add(h.id));
+    sections = await buildNotionSections(hits, headers);
+    if (sections.length >= 2) return sections.join('\n\n---\n\n');
+  }
+
+  const live = await searchNotionLive(query, token, seen, MAX_PAGES - sections.length);
+  return [...sections, ...live].join('\n\n---\n\n');
+}
+
+// Live Notion API search (no index). Returns an array of context sections.
+async function searchNotionLive(query, token, excludeIds = new Set(), limit = 6) {
+  const headers = notionHeaders(token);
 
   // Run page search + database discovery in parallel
   const [pageResult, dbResult] = await Promise.allSettled([
@@ -328,7 +371,7 @@ async function searchNotionContext(query, token) {
   // Fallback: if no title match, include the 2 most recently edited rows so structured
   // databases (e.g. tracker tables) still surface their content even when row titles
   // don't contain the query terms.
-  const existingIds = new Set(pageResults.map(p => p.id));
+  const existingIds = new Set([...excludeIds, ...pageResults.map(p => p.id)]);
   const words       = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
   let dbPages = [];
 
@@ -364,24 +407,12 @@ async function searchNotionContext(query, token) {
     dbPages = buckets.flat();
   }
 
-  // Merge: page search first, then DB matches that weren't already found; cap at 6 total
-  const pages    = [...pageResults, ...dbPages].slice(0, 6);
-  const sections = [];
-  for (const page of pages) {
-    try {
-      const title  = extractNotionTitle(page);
-      const props  = extractNotionProperties(page);          // database column values
-      const blocks = await extractNotionContent(page.id, headers, 0, { n: 0 }, new Set([page.id]));
-      const body   = [props, blocks].filter(Boolean).join('\n\n');
-      if (body.trim()) {
-        sections.push(`### ${title}\n${body.slice(0, 6000)}`);
-      }
-    } catch {
-      // skip pages that fail
-    }
-  }
+  // Merge: page search first, then DB matches that weren't already found
+  const pages = [...pageResults.filter(p => !excludeIds.has(p.id)), ...dbPages]
+    .slice(0, Math.max(0, limit))
+    .map(p => ({ id: p.id, title: extractNotionTitle(p), props: extractNotionProperties(p) }));
 
-  return sections.join('\n\n---\n\n');
+  return buildNotionSections(pages, headers);
 }
 
 async function fetchIntercomContext(query, token) {
@@ -569,10 +600,19 @@ async function handleNotionSearch(request, env) {
     return corsResponse(JSON.stringify({ error: `Notion search error: ${err.message}` }), 502);
   }
 
-  const pages = (searchData.results || []).slice(0, 10);
+  // Index hits first (ranked across the whole synced workspace), then live results
+  const index     = await loadNotionIndex(env, token);
+  const indexHits = index ? rankNotionIndex(index.pages, query).slice(0, 10) : [];
+  const indexed   = indexHits.map(p => ({
+    id: p.id, title: p.title, url: p.url,
+    snippet: [p.props, p.snippet].filter(Boolean).join('  ·  ').replace(/\s+/g, ' ').slice(0, 280),
+    lastEdited: p.lastEdited,
+  }));
+  const seen  = new Set(indexed.map(r => r.id));
+  const pages = (searchData.results || []).filter(p => !seen.has(p.id)).slice(0, 10 - indexed.length);
 
-  // Fetch a brief snippet (first 5 blocks) for each page in parallel
-  const results = await Promise.all(pages.map(async page => {
+  // Fetch a brief snippet (first 5 blocks) for each live-only page in parallel
+  const live = await Promise.all(pages.map(async page => {
     const title = extractNotionTitle(page);
     const url   = page.url || `https://notion.so/${page.id.replace(/-/g, '')}`;
 
@@ -600,7 +640,7 @@ async function handleNotionSearch(request, env) {
     return { id: page.id, title, url, snippet, lastEdited: page.last_edited_time };
   }));
 
-  return corsResponse(JSON.stringify({ results }));
+  return corsResponse(JSON.stringify({ results: [...indexed, ...live], indexed: !!index }));
 }
 
 /* ── /fetch-source ───────────────────────────────────────── */
@@ -958,7 +998,7 @@ async function handleFetchSource(request, env) {
       const pageData = await pageRes.json();
       const title    = extractNotionTitle(pageData);
       const props    = extractNotionProperties(pageData);    // database column values
-      const blocks   = await extractNotionContent(pageId, headers, 0, { n: 0 }, new Set([pageId]));
+      const blocks   = await extractNotionContent(pageId, headers, 0, { n: 0 }, new Set());
       const content  = [props, blocks].filter(Boolean).join('\n\n');
 
       return corsResponse(JSON.stringify({ title, content: content.slice(0, 30000) }));
@@ -968,6 +1008,303 @@ async function handleFetchSource(request, env) {
   }
 
   return corsResponse(JSON.stringify({ error: `Unknown source type: ${type}` }), 400);
+}
+
+/* ── Notion workspace index (sync) ──────────────────────── */
+//
+// "Sync Workspace" crawls every page the Notion token can see and stores a compact
+// full-text index in KV. Indexes are keyed by a hash of the token, so each connected
+// workspace/user gets its own index and nobody overwrites anyone else's.
+//
+// The crawl is chunked: each POST /notion-sync-all does at most SYNC_BUDGET Notion
+// calls (well under Cloudflare's per-request subrequest limit), saves progress to KV,
+// and tells the client to call again until `done` is true. Re-syncs are incremental:
+// pages whose last_edited_time hasn't changed reuse their stored snippet for free.
+
+const NOTION_INDEX_MAX_PAGES = 1000;
+const NOTION_SNIPPET_CHARS   = 1500;
+const SYNC_BUDGET            = 35;
+const SYNC_CONCURRENCY       = 3;   // Notion allows ~3 requests/second on average
+
+const STOPWORDS = new Set(('a an and are as at be been but by can could did do does for from had has have how i ' +
+  'if in into is it its me my no not of on or our please so than that the their them then there these they ' +
+  'this to us was we were what when where which who why will with would you your hi hello thanks thank').split(' '));
+
+async function notionTokenHash(token) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function notionKeys(token) {
+  const h = await notionTokenHash(token);
+  return { index: `notion-index:${h}`, pending: `notion-sync:${h}` };
+}
+
+async function loadNotionIndex(env, token) {
+  if (!env?.TRAINING_KV || !token) return null;
+  try {
+    const { index } = await notionKeys(token);
+    const raw = await env.TRAINING_KV.get(index);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.pages?.length ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function tokenize(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 1 && !STOPWORDS.has(w));
+}
+
+// Lightweight relevance ranking over the whole index: IDF-weighted term hits,
+// title matches count 3x, plus bonuses for query coverage and exact phrase matches.
+function rankNotionIndex(pages, query) {
+  const terms = [...new Set(tokenize(query))].slice(0, 30);
+  if (!terms.length || !pages?.length) return [];
+
+  const docs = pages.map(p => ({
+    page:  p,
+    title: (p.title || '').toLowerCase(),
+    body:  `${p.props || ''} ${p.snippet || ''}`.toLowerCase(),
+  }));
+
+  const N   = docs.length;
+  const idf = {};
+  for (const t of terms) {
+    const df = docs.reduce((n, d) => n + (d.title.includes(t) || d.body.includes(t) ? 1 : 0), 0);
+    idf[t] = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+  }
+
+  const phrase = query.toLowerCase().replace(/\s+/g, ' ').trim();
+  const scored = docs.map(d => {
+    let score = 0, matched = 0;
+    for (const t of terms) {
+      const inTitle = d.title.includes(t);
+      const inBody  = d.body.includes(t);
+      if (inTitle || inBody) matched++;
+      score += idf[t] * ((inTitle ? 3 : 0) + (inBody ? 1 : 0));
+    }
+    if (!matched) return { ...d.page, score: 0 };
+    score *= 0.5 + matched / terms.length;
+    if (phrase.length > 4 && phrase.length < 120 && (d.title.includes(phrase) || d.body.includes(phrase))) score *= 1.5;
+    return { ...d.page, score };
+  }).filter(p => p.score > 0).sort((a, b) => b.score - a.score);
+
+  // Drop the long tail of weak matches relative to the best hit
+  const floor = (scored[0]?.score || 0) * 0.3;
+  return scored.filter(p => p.score >= floor);
+}
+
+function notionParentLabel(page) {
+  const parent = page.parent || {};
+  if (parent.type === 'database_id') return 'database';
+  if (parent.type === 'workspace')   return 'workspace';
+  return '';
+}
+
+async function readNotionBody(res) {
+  try { return await res.json(); } catch { return {}; }
+}
+
+async function handleNotionSyncAll(request, env) {
+  let body;
+  try { body = await request.json(); } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+
+  const { notionToken, reset = false, seq } = body;
+  if (!notionToken) return corsResponse(JSON.stringify({ error: 'notionToken is required' }), 400);
+  if (!env.TRAINING_KV) return corsResponse(JSON.stringify({ error: 'KV storage is not configured' }), 500);
+
+  const keys    = await notionKeys(notionToken);
+  const headers = notionHeaders(notionToken);
+
+  let state = null;
+  if (!reset) {
+    const raw = await env.TRAINING_KV.get(keys.pending);
+    if (raw) { try { state = JSON.parse(raw); } catch { state = null; } }
+  }
+
+  // Client and server disagree on progress (KV is eventually consistent) — ask it to retry
+  if (state && seq != null && state.seq !== seq) {
+    return corsResponse(JSON.stringify({ done: false, retryAfter: 1500, seq: state.seq, ...syncProgress(state) }));
+  }
+
+  if (!state) {
+    state = { seq: 0, startedAt: new Date().toISOString(), cursor: null, searchDone: false, queue: [], pages: [] };
+  }
+
+  // Previous index lets unchanged pages skip their block fetch entirely
+  const prevIndex = await loadNotionIndex(env, notionToken);
+  const prev = new Map((prevIndex?.pages || []).map(p => [p.id, p]));
+
+  let budget = SYNC_BUDGET;
+  let rateLimitedFor = 0;
+
+  // Phase 1 — discover pages (100 per Notion search call)
+  while (!state.searchDone && budget > 0 && !rateLimitedFor) {
+    budget--;
+    const res = await fetch('https://api.notion.com/v1/search', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        filter: { value: 'page', property: 'object' },
+        sort: { direction: 'descending', timestamp: 'last_edited_time' },
+        page_size: 100,
+        ...(state.cursor ? { start_cursor: state.cursor } : {}),
+      }),
+    });
+
+    if (res.status === 429) {
+      rateLimitedFor = (Number(res.headers.get('Retry-After')) || 2) * 1000;
+      break;
+    }
+    if (!res.ok) {
+      const err = await readNotionBody(res);
+      const msg = res.status === 401
+        ? 'Notion rejected the token — reconnect Notion and try again.'
+        : err.message || `Notion search failed (${res.status})`;
+      return corsResponse(JSON.stringify({ error: msg }), 502);
+    }
+
+    const data = await res.json();
+    const known = state.queue.length + state.pages.length;
+    for (const page of (data.results || []).slice(0, Math.max(0, NOTION_INDEX_MAX_PAGES - known))) {
+      if (page.archived || page.in_trash) continue;
+      state.queue.push({
+        id:         page.id,
+        title:      extractNotionTitle(page),
+        url:        page.url || `https://notion.so/${page.id.replace(/-/g, '')}`,
+        lastEdited: page.last_edited_time,
+        parent:     notionParentLabel(page),
+        props:      extractNotionProperties(page).slice(0, 800),
+      });
+    }
+
+    const full = state.queue.length + state.pages.length >= NOTION_INDEX_MAX_PAGES;
+    state.cursor     = data.has_more && !full ? data.next_cursor : null;
+    state.searchDone = !state.cursor;
+    state.truncated  = state.truncated || (full && !!data.has_more);
+  }
+
+  // Phase 2 — index content. Unchanged pages are free; changed pages cost one call.
+  while (state.queue.length && !rateLimitedFor) {
+    const head = state.queue[0];
+    const old  = prev.get(head.id);
+    if (old && old.lastEdited === head.lastEdited && old.snippet != null) {
+      state.queue.shift();
+      state.pages.push({ ...head, snippet: old.snippet });
+      continue;
+    }
+    if (budget <= 0) break;
+
+    const batch = [];
+    while (batch.length < Math.min(SYNC_CONCURRENCY, budget) && state.queue.length) {
+      const next = state.queue[0];
+      const o    = prev.get(next.id);
+      if (o && o.lastEdited === next.lastEdited && o.snippet != null) break; // handle on next loop pass
+      batch.push(state.queue.shift());
+    }
+    budget -= batch.length;
+
+    const results = await Promise.all(batch.map(async item => {
+      try {
+        const res = await fetch(`https://api.notion.com/v1/blocks/${item.id}/children?page_size=50`, { headers });
+        if (res.status === 429) return { item, retry: (Number(res.headers.get('Retry-After')) || 2) * 1000 };
+        if (!res.ok) return { item, text: '' };
+        const data = await res.json();
+        const text = (data.results || []).map(b => blockToLine(b, 0)).filter(Boolean).join('\n');
+        return { item, text };
+      } catch {
+        return { item, text: '' };
+      }
+    }));
+
+    for (const r of results) {
+      if (r.retry) {
+        rateLimitedFor = Math.max(rateLimitedFor, r.retry);
+        state.queue.unshift(r.item);
+        continue;
+      }
+      const snippet = r.text.slice(0, NOTION_SNIPPET_CHARS);
+      state.pages.push({ ...r.item, snippet });
+    }
+  }
+
+  // Finished — publish the index and drop the in-progress state
+  if (state.searchDone && !state.queue.length) {
+    const syncedAt = new Date().toISOString();
+    const pages    = state.pages;
+    await env.TRAINING_KV.put(keys.index, JSON.stringify({ syncedAt, truncated: !!state.truncated, pages }));
+    await env.TRAINING_KV.delete(keys.pending);
+    return corsResponse(JSON.stringify({
+      done: true, count: pages.length, syncedAt, truncated: !!state.truncated,
+    }));
+  }
+
+  state.seq++;
+  await env.TRAINING_KV.put(keys.pending, JSON.stringify(state), { expirationTtl: 3600 });
+  return corsResponse(JSON.stringify({
+    done: false, seq: state.seq, retryAfter: rateLimitedFor || 0, ...syncProgress(state),
+  }));
+}
+
+function syncProgress(state) {
+  return {
+    indexed:    state.pages.length,
+    discovered: state.pages.length + state.queue.length,
+    searchDone: state.searchDone,
+  };
+}
+
+async function handleNotionSyncStatus(request, env) {
+  let body;
+  try { body = await request.json(); } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+  const { notionToken } = body;
+  if (!notionToken) return corsResponse(JSON.stringify({ error: 'notionToken is required' }), 400);
+  if (!env.TRAINING_KV) return corsResponse(JSON.stringify({ synced: false }));
+
+  const keys = await notionKeys(notionToken);
+  const [rawIndex, rawPending] = await Promise.all([
+    env.TRAINING_KV.get(keys.index),
+    env.TRAINING_KV.get(keys.pending),
+  ]);
+
+  let status = { synced: false, count: 0, syncedAt: null, truncated: false };
+  if (rawIndex) {
+    try {
+      const { syncedAt, pages = [], truncated = false } = JSON.parse(rawIndex);
+      status = { synced: true, count: pages.length, syncedAt, truncated };
+    } catch { /* treat as unsynced */ }
+  }
+  if (rawPending) {
+    try {
+      const state = JSON.parse(rawPending);
+      status.inProgress = { seq: state.seq, ...syncProgress(state) };
+    } catch { /* ignore */ }
+  }
+  return corsResponse(JSON.stringify(status));
+}
+
+async function handleNotionSyncClear(request, env) {
+  let body;
+  try { body = await request.json(); } catch {
+    return corsResponse(JSON.stringify({ error: 'Invalid JSON body' }), 400);
+  }
+  const { notionToken } = body;
+  if (!notionToken) return corsResponse(JSON.stringify({ error: 'notionToken is required' }), 400);
+  if (env.TRAINING_KV) {
+    const keys = await notionKeys(notionToken);
+    await Promise.all([env.TRAINING_KV.delete(keys.index), env.TRAINING_KV.delete(keys.pending)]);
+  }
+  return corsResponse(JSON.stringify({ ok: true }));
 }
 
 /* ── /training ───────────────────────────────────────────── */
@@ -1107,6 +1444,18 @@ export default {
 
     if (pathname === '/fetch-source' && request.method === 'POST') {
       return handleFetchSource(request, env);
+    }
+
+    if (pathname === '/notion-sync-all' && request.method === 'POST') {
+      return handleNotionSyncAll(request, env);
+    }
+
+    if (pathname === '/notion-sync-status' && request.method === 'POST') {
+      return handleNotionSyncStatus(request, env);
+    }
+
+    if (pathname === '/notion-sync-clear' && request.method === 'POST') {
+      return handleNotionSyncClear(request, env);
     }
 
     if (pathname === '/notion-auth' && request.method === 'POST') {

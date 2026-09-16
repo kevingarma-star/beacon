@@ -7,6 +7,7 @@ import QuickTraining    from './QuickTraining'
 import { useTraining }     from './useTraining'
 import { useSources }      from './useSources'
 import { useConnections }  from './useConnections'
+import { useNotionSync }   from './useNotionSync'
 import NotionSearch        from './NotionSearch'
 import Connectors          from './Connectors'
 
@@ -39,6 +40,13 @@ export default function App() {
   const training     = useTraining()
   const sources      = useSources()
   const { connections, saveConnection, removeConnection } = useConnections()
+  const notionSync   = useNotionSync(connections.notionToken)
+
+  function handleRemoveConnection(key) {
+    // Disconnecting Notion also deletes its workspace index from the server
+    if (key === 'notionToken') notionSync.clear(connections.notionToken)
+    removeConnection(key)
+  }
 
   // Handle Notion OAuth callback — token arrives in the URL hash
   useEffect(() => {
@@ -229,8 +237,9 @@ export default function App() {
         <Connectors
           connections={connections}
           onSave={saveConnection}
-          onRemove={removeConnection}
+          onRemove={handleRemoveConnection}
           addSource={sources.addSource}
+          notionSync={notionSync}
         />
       )}
 
@@ -339,7 +348,11 @@ export default function App() {
                 {connections.notionToken && (
                   <div className="training-active-badge">
                     <span className="training-dot" />
-                    Notion workspace
+                    {notionSync.syncing
+                      ? 'Notion workspace · syncing…'
+                      : notionSync.status?.synced
+                        ? `Notion workspace · ${notionSync.status.count} pages`
+                        : 'Notion workspace'}
                   </div>
                 )}
                 {connections.intercomToken && (
