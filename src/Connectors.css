@@ -310,3 +310,113 @@
   padding: 0;
   max-width: none;
 }
+
+/* ── Notion workspace sync ────────────────────────────── */
+
+.notion-sync {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notion-sync-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.notion-sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted-d);
+  flex-shrink: 0;
+}
+
+.notion-sync-dot--ok   { background: var(--green); }
+.notion-sync-dot--busy { background: var(--sky); animation: notion-sync-pulse 1.2s ease-in-out infinite; }
+
+.notion-sync-label {
+  flex: 1;
+  min-width: 180px;
+  font-size: 12.5px;
+  color: var(--sky);
+  line-height: 1.45;
+}
+
+.notion-sync-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sky);
+  background: rgba(203, 238, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.notion-sync-btn:hover:not(:disabled) {
+  background: rgba(203, 238, 255, 0.12);
+  border-color: rgba(203, 238, 255, 0.25);
+}
+
+.notion-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.notion-sync-bar {
+  position: relative;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(203, 238, 255, 0.1);
+  overflow: hidden;
+}
+
+.notion-sync-bar span {
+  display: block;
+  height: 100%;
+  background: var(--orange);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.notion-sync-bar--indeterminate span {
+  width: 35%;
+  animation: notion-sync-slide 1.3s ease-in-out infinite;
+}
+
+.notion-sync-note,
+.notion-sync-error {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.notion-sync-error { color: var(--coral); }
+
+@keyframes notion-sync-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+@keyframes notion-sync-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notion-sync-dot--busy,
+  .notion-sync-bar--indeterminate span { animation: none; }
+}

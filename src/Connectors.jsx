@@ -61,7 +61,7 @@ const CONNECTORS = [
   {
     id: 'notion',
     name: 'Notion',
-    description: 'Searches your entire Notion workspace — pages, docs, and databases are queried live on every generation.',
+    description: 'Indexes your whole Notion workspace (pages, docs, and database rows) and pulls the most relevant pages into every generation.',
     tokenKey: 'notionToken',
     oauth: true,
     placeholder: 'secret_xxxx… or ntn_xxxx…',
@@ -126,7 +126,7 @@ const CONNECTORS = [
 
 /* ── Connector card ──────────────────────────────────────── */
 
-function ConnectorCard({ def, connected, onConnect, onDisconnect }) {
+function ConnectorCard({ def, connected, onConnect, onDisconnect, children }) {
   const [expanded, setExpanded]   = useState(false)
   const [draft, setDraft]         = useState('')
   const [oauthBusy, setOauthBusy] = useState(false)
@@ -215,6 +215,8 @@ function ConnectorCard({ def, connected, onConnect, onDisconnect }) {
         )}
       </div>
 
+      {connected && children}
+
       {!connected && expanded && (
         <form className="conn2-form" onSubmit={handleConnect}>
           {def.hint && <p className="conn2-hint">{def.hint}</p>}
@@ -237,9 +239,74 @@ function ConnectorCard({ def, connected, onConnect, onDisconnect }) {
   )
 }
 
+/* ── Notion workspace sync panel ─────────────────────────── */
+
+function formatSyncDate(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+    ' at ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+function NotionSyncPanel({ sync }) {
+  const { status, syncing, progress, error } = sync
+
+  let label
+  if (syncing) {
+    label = progress
+      ? progress.searchDone
+        ? `Indexing pages… ${progress.indexed} of ${progress.discovered}`
+        : `Finding pages… ${progress.discovered} so far`
+      : 'Starting sync…'
+  } else if (status === null) {
+    label = error ? 'Could not check sync status' : 'Checking sync status…'
+  } else if (status.synced) {
+    label = `${status.count} page${status.count === 1 ? '' : 's'} indexed · Last synced ${formatSyncDate(status.syncedAt)}`
+  } else {
+    label = 'Workspace not indexed yet — answers use live Notion search only'
+  }
+
+  const pct = progress?.searchDone && progress.discovered
+    ? Math.round((progress.indexed / progress.discovered) * 100)
+    : null
+
+  return (
+    <div className="notion-sync">
+      <div className="notion-sync-row">
+        <span className={`notion-sync-dot${status?.synced ? ' notion-sync-dot--ok' : ''}${syncing ? ' notion-sync-dot--busy' : ''}`} />
+        <span className="notion-sync-label">{label}</span>
+        <button
+          type="button"
+          className="notion-sync-btn"
+          onClick={() => sync.sync()}
+          disabled={syncing}
+        >
+          {syncing ? <><span className="spinner" />&nbsp;Syncing</> : status?.synced ? 'Re-sync' : 'Sync workspace'}
+        </button>
+      </div>
+
+      {syncing && (
+        <div className={`notion-sync-bar${pct === null ? ' notion-sync-bar--indeterminate' : ''}`}>
+          <span style={pct === null ? undefined : { width: `${pct}%` }} />
+        </div>
+      )}
+
+      {status?.truncated && !syncing && (
+        <p className="notion-sync-note">Only the 1,000 most recently edited pages are indexed.</p>
+      )}
+      {!syncing && !error && (
+        <p className="notion-sync-note">
+          Every synced page is ranked on each Generate, Chat, and Search. Only pages shared with the integration are included; the index refreshes automatically once a day.
+        </p>
+      )}
+      {error && <p className="notion-sync-error">{error}</p>}
+    </div>
+  )
+}
+
 /* ── Main Connectors component ───────────────────────────── */
 
-export default function Connectors({ connections, onSave, onRemove, addSource }) {
+export default function Connectors({ connections, onSave, onRemove, addSource, notionSync }) {
   const connectedCount = CONNECTORS.filter(c => c.tokenKey && connections[c.tokenKey]).length
 
   return (
@@ -268,7 +335,9 @@ export default function Connectors({ connections, onSave, onRemove, addSource })
             connected={!!(def.tokenKey && connections[def.tokenKey])}
             onConnect={token => onSave({ [def.tokenKey]: token })}
             onDisconnect={() => onRemove(def.tokenKey)}
-          />
+          >
+            {def.id === 'notion' && notionSync && <NotionSyncPanel sync={notionSync} />}
+          </ConnectorCard>
         ))}
       </div>
 
